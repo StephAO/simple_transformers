@@ -5,11 +5,15 @@ from PIL.Image import Image, fromarray
 import torch as th
 import torch.nn as nn
 from transformers import CLIPTokenizer, CLIPImageProcessor
-import torchvision.transforms as T
 
 from types import SimpleNamespace
 from typing import Union, List, Tuple, Any
 
+"""
+All processors can be used for encoding. 
+Only processors with 'output_embeddings_to_logits' and 'logits_to_output' functions can be used for decoding.
+Currently this only includes TextProcessor and ActionProcessor
+"""
 
 class Processor(nn.Module, ABC):
     def __init__(self, config: SimpleNamespace, **kwargs):
@@ -41,6 +45,12 @@ class Processor(nn.Module, ABC):
 
 
 class TextProcessor(Processor):
+    """
+    Processes string text into input embeddings. Uses a pretrained tokenizer from huggingface.
+    Attention mask is created by tokenizer..
+    REQUIRES: 'max_text_length' kwarg
+    Can be used for generation as well
+    """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config)
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", model_max_length=256)
@@ -62,7 +72,6 @@ class TextProcessor(Processor):
 
         # Scale input embeddings by sqrt of d_model. Unclear why, but seems to be standard practice
         # https://datascience.stackexchange.com/questions/87906/transformer-model-why-are-word-embeddings-scaled-before-adding-positional-encod/87909#87909
-        # embeddings = (input_embeds * 1) + position_embeddings # CLIPEncoder
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -78,6 +87,12 @@ class TextProcessor(Processor):
 
 
 class ImageProcessor(Processor):
+    """
+    Processes PIL.Images or np.arrays images into input embeddings. Uses a huggingface pretrained image preprocessor.
+    Assumes all images are the same size (if np.array) or made to be the same size using the preprocessor (PIL.Image).
+    Since images are all the same size, forward pass creates a constant sized attention mask.
+    REQUIRES: 'image_size', 'patch_size', and 'num_channels', kwargs
+    """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config)
         # Patching logic taken from : https://github.com/huggingface/transformers/blob/v4.27.1/src/transformers/models/vit/modeling_vit.py#L141
@@ -121,6 +136,12 @@ class ImageProcessor(Processor):
 
 
 class ActionProcessor(Processor):
+    """
+    Processes discrete actions into input embeddings.
+    Attention mask must be passed in.
+    REQUIRES: 'num_actions', 'max_seq_length' kwargs.
+    Can be used for generation as well
+    """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config)
         self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
@@ -155,6 +176,11 @@ class ActionProcessor(Processor):
         return action_ids
 
 class GridStateProcessor(Processor):
+    """
+    Processes a grid world representation into input embeddings.
+    Attention mask must be passed in.
+    REQUIRES: 'state_size', 'max_seq_length' kwargs.
+    """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config)
         self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
@@ -180,7 +206,13 @@ class GridStateProcessor(Processor):
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
 
-class GridTrajProcessor(Processor):
+class TrajectoryProcessor(Processor):
+    """
+    Processes a trajectory (sequence of states and actions) into input embeddings.
+    Currently, states should be grid world representations.
+    Attention mask must be passed in.
+    REQUIRES: 'state_size', 'max_seq_length' kwargs.
+    """
     def __init__(self, config, **kwargs):
         super().__init__(config)
         self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
@@ -222,12 +254,17 @@ class GridTrajProcessor(Processor):
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
 
-class InitStateProcessor(Processor):
+class InitialStateProcessor(Processor):
+    """
+    Processes an initial state and mission into input embeddings
+    Currently, this should be a tuple of a grid world representation and a string describing the mission
+    Attention mask must be passed in.
+    REQUIRES: 'state_size', 'max_text_length' kwargs.
+    """
     def __init__(self, config, **kwargs):
         super().__init__(config)
         self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
         self.text_processor = TextProcessor(config, **kwargs)
-        self.state_position_embeddings = nn.Parameter(th.randn(config.d_model))
         self.state_type_emb = nn.Parameter(th.randn(config.d_model))
         self.text_type_emb = nn.Parameter(th.randn(config.d_model))
         self.to(self.config.device)
@@ -259,6 +296,6 @@ MODALITY_PROCESSORS = {
     'images': ImageProcessor,
     'actions': ActionProcessor,
     'states': GridStateProcessor,
-    'trajs': GridTrajProcessor,
-    'init_state': InitStateProcessor
+    'trajs': TrajectoryProcessor,
+    'init_state': InitialStateProcessor
 }
