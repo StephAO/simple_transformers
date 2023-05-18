@@ -1,7 +1,9 @@
 # Simple Transformers
-Simple implementations of transformers to encode and decode most modalities. The transformer, defined in transformer.py 
-and configured using config.yaml, do not change between modalities. The different modalities differ only in their 
-processing, which happens in modality_processors.py. Some basic example using is shown in example_usage.py. NOTE: 
+Simple implementations of transformers to encode and decode most modalities. The transformer, defined in `transformer.py` 
+and configured using `config.yaml`, do not change between modalities. The different modalities differ only in their 
+processing, which happens in `modality_processors.py`. Some basic example using is shown in `example_usage.py`. 
+
+NOTE: 
 the training loops are purely to demonstrate how to use the transformers and should not be used directly.
 
 ## Comparison to Hugging Face
@@ -13,7 +15,7 @@ due to it's size, cloning the HF repo to make some small changes requires dealin
 repo. This is why I developed simple transformers: it is a lightweight repo that only contains the basics. It covers
 enough modalities, so that if there is a modality you require that is not present, it should be straightforward to adapt
 one of the existing processors for your needs. In addition, because of its small size, it is easy to clone and adjust
-to your needs. The only downside, is that it expects all the models to be trained from scratch.
+to your needs. This flexibility comes with the downside that pre-trained models are not provided.
 
 ## Set Up
 Example environment set up:  
