@@ -22,3 +22,9 @@ Example environment set up:
 3. install required pytorch setup using conda following: https://pytorch.org/, e.g.  
 `conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia`  
 5. `pip install -e .`  
+
+## TODOs
+- Make quickstart guide from example usages
+  - Fix problems in example usage (e.g. val/test sets, zero out decoding loss where appropriate)
+  - Turn example usage into a proper script (if __name__ == "__main__" etc) with args. And tell folks to run python scripts/example_usage.py etc.
+  - Move this into a Colab that imports the library and runs end to end.

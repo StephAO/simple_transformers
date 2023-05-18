@@ -17,7 +17,12 @@ setup(name='oai_agents',
       keywords=['Transformers', 'Deep Learning', 'Machine Learning'],
       packages=['simple_transformers'],
       package_dir={
-          'oai_agents': 'simple_transformers',
+          'simple_transformers': 'simple_transformers',
+      },
+      package_data={
+          'simple_transformers': [
+              'simple_transformers.config.yaml'
+          ],
       },
       install_requires=[
         'numpy',

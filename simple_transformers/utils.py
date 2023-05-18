@@ -18,8 +18,9 @@ def _init_weights(m):
 
 def get_config():
     import yaml
+    from pkg_resources import resource_filename
 
-    with open("simple_transformers/config.yaml") as config_file:
+    with open(resource_filename('simple_transformers', 'config.yaml')) as config_file:
         config = yaml.safe_load(config_file)
     config = SimpleNamespace(**config)
     config.device = th.device('cuda' if th.cuda.is_available() else 'cpu')

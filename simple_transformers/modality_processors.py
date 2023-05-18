@@ -1,3 +1,8 @@
+"""
+All processors can be used for encoding.
+Only processors with 'output_embeddings_to_logits' and 'logits_to_output' functions can be used for decoding.
+Currently, this only includes TextProcessor and ActionProcessor
+"""
 from abc import ABC, abstractmethod
 import math
 import numpy as np
@@ -9,12 +14,6 @@ from transformers import CLIPTokenizer, CLIPImageProcessor
 from types import SimpleNamespace
 from typing import Union, List, Tuple, Any
 
-"""
-All processors can be used for encoding. 
-Only processors with 'output_embeddings_to_logits' and 'logits_to_output' functions can be used for decoding.
-Currently this only includes TextProcessor and ActionProcessor
-"""
-
 class Processor(nn.Module, ABC):
     def __init__(self, config: SimpleNamespace, **kwargs):
         """
@@ -23,6 +22,7 @@ class Processor(nn.Module, ABC):
         :param kwargs: kwargs required from dataset (e.g. max trajectory length)
         """
         super().__init__()
+        self.check_required_kwargs(**kwargs)
         self.config = config
         self.LayerNorm = nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.dropout_prob)
@@ -43,16 +43,29 @@ class Processor(nn.Module, ABC):
         """
         pass
 
+    @staticmethod
+    @abstractmethod
+    def required_attributes() -> dict:
+        pass
+
+    def check_required_kwargs(self, **kwargs):
+        for key, value in self.required_attributes().items():
+            if key not in kwargs:
+                raise TypeError(f'{self.__class__.__name__} missing required keyword argument: "{key}"')
+            elif not isinstance(kwargs[key], value):
+                raise TypeError(f'{self.__class__.__name__} keyword argument: "{key}" must be of type {value} and not '
+                                f'{type(kwargs[key])}')
+
 
 class TextProcessor(Processor):
     """
     Processes string text into input embeddings. Uses a pretrained tokenizer from huggingface.
-    Attention mask is created by tokenizer..
+    Attention mask is created by tokenizer.
     REQUIRES: 'max_text_length' kwarg
     Can be used for generation as well
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", model_max_length=256)
         self.word_embeddings = nn.Embedding(self.tokenizer.vocab_size, config.d_model,
                                             padding_idx=self.tokenizer.pad_token_id)
@@ -61,6 +74,11 @@ class TextProcessor(Processor):
         # register buffer (these are constant tokens and NOT token embeddings)
         self.register_buffer('position_ids', position_ids)
         self.to(self.config.device)
+
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'max_text_length': int}
+
 
     def forward(self, text: List[str], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
         tokens = self.tokenizer(text, padding=True, return_tensors='pt')
@@ -94,7 +112,7 @@ class ImageProcessor(Processor):
     REQUIRES: 'image_size', 'patch_size', and 'num_channels', kwargs
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
         # Patching logic taken from : https://github.com/huggingface/transformers/blob/v4.27.1/src/transformers/models/vit/modeling_vit.py#L141
         self.image_size = kwargs['image_size']
         self.patch_size = kwargs['patch_size']
@@ -111,12 +129,16 @@ class ImageProcessor(Processor):
         self.register_buffer('position_ids', position_ids)
         self.to(self.config.device)
 
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'image_size': int, 'patch_size': int, 'num_channels': int}
+
     def forward(self, images: Union[List[Image], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
         """
         :param images: If using PIL.Images, then preprocess using clip image preprocessing. This includes normalization
                        and resizing to image size 224. Otherwise, condition directly on provided np.array
         """
-        if type(images) == np.ndarray:
+        if isinstance(images, np.ndarray):
             pixel_values = th.tensor(images).to(self.config.device).float()
         else:
             pixel_values = self.img_processor(images, return_tensors='pt')['pixel_values'].to(self.config.device)
@@ -143,24 +165,31 @@ class ActionProcessor(Processor):
     Can be used for generation as well
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config)
-        self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
+        super().__init__(config, **kwargs)
+        # +1 for SOS/CLS token
+        self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
         self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.d_model)
-        self.cls_embedding = nn.Parameter(th.randn(config.d_model))
+        cls_id = th.tensor(kwargs['num_actions'])
         position_ids = th.arange(start=0, end=kwargs['max_seq_length'] + 1, step=1)
-        # register buffer (these are constant tokens and NOT token embeddings)
+        # register buffer (these are constant ids, not embeddings)
         self.register_buffer('position_ids', position_ids)
+        self.register_buffer('cls_id', cls_id)
         self.to(self.config.device)
+
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'num_actions': int, 'max_seq_length': int}
 
     def forward(self, actions: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
         batch_size, traj_length = actions.shape
         actions = th.from_numpy(actions).to(self.config.device).int()
         att_mask = th.from_numpy(att_mask).to(self.config.device).int()
-        input_embeds = self.action_embeddings(actions)
         # Add cls token to the start of each traj
-        input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
+        actions = th.cat([self.cls_id.expand(batch_size, 1).to(self.config.device), actions], dim=1)
         att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
+        # Embed
+        input_embeds = self.action_embeddings(actions)
         position_embeddings = self.position_embeddings(self.position_ids)
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
@@ -182,7 +211,7 @@ class GridStateProcessor(Processor):
     REQUIRES: 'state_size', 'max_seq_length' kwargs.
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
         self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
         self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.d_model)
         self.cls_embedding = nn.Parameter(th.randn(config.d_model))
@@ -190,6 +219,10 @@ class GridStateProcessor(Processor):
         # register buffer (these are constant tokens and NOT token embeddings)
         self.register_buffer('position_ids', position_ids)
         self.to(self.config.device)
+
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'state_size': int, 'max_seq_length': int}
 
     def forward(self, states: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
@@ -214,7 +247,7 @@ class TrajectoryProcessor(Processor):
     REQUIRES: 'state_size', 'max_seq_length' kwargs.
     """
     def __init__(self, config, **kwargs):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
         self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
         self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
         self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] * 2 + 1, config.d_model)
@@ -224,9 +257,13 @@ class TrajectoryProcessor(Processor):
         self.register_buffer('position_ids', position_ids)
         self.to(self.config.device)
 
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'state_size': int, 'max_seq_length': int}
+
     def forward(self, traj: Tuple[np.array, np.array], att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
-        # Move things to tensors on the right device
+        # Move inputs to tensors on the right device
         states, actions = traj
         states_att_mask, actions_att_mask = att_mask
         batch_size, traj_length, grid_size, grid_size, _ = states.shape
@@ -258,16 +295,21 @@ class InitialStateProcessor(Processor):
     """
     Processes an initial state and mission into input embeddings
     Currently, this should be a tuple of a grid world representation and a string describing the mission
-    Attention mask must be passed in.
+    State always has length of 1, so attention mask is calculated by increasing the length of the text
+    attention mask by 1
     REQUIRES: 'state_size', 'max_text_length' kwargs.
     """
     def __init__(self, config, **kwargs):
-        super().__init__(config)
+        super().__init__(config, **kwargs)
         self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
         self.text_processor = TextProcessor(config, **kwargs)
         self.state_type_emb = nn.Parameter(th.randn(config.d_model))
         self.text_type_emb = nn.Parameter(th.randn(config.d_model))
         self.to(self.config.device)
+
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'state_size': int, 'max_text_length': int}
 
     def forward(self, init_state: Tuple[np.array, str], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
         # Move things to tensors on the right device
@@ -291,7 +333,7 @@ class InitialStateProcessor(Processor):
         return embeddings, att_mask
 
 
-MODALITY_PROCESSORS = {
+ENCODER_MODALITY_PROCESSORS = {
     'text': TextProcessor,
     'images': ImageProcessor,
     'actions': ActionProcessor,
@@ -299,3 +341,9 @@ MODALITY_PROCESSORS = {
     'trajs': TrajectoryProcessor,
     'init_state': InitialStateProcessor
 }
+
+DECODER_MODALITY_PROCESSORS = {
+    'text': TextProcessor,
+    'images': ImageProcessor,
+}
+

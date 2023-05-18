@@ -1,3 +1,6 @@
+"""
+TODO Clean examples up, especially training loops (use val/test set, mask out loss on decoding)
+"""
 from datasets import load_dataset
 import numpy as np
 from PIL import Image
@@ -5,7 +8,6 @@ import torch as th
 from torch.utils.data import DataLoader
 
 from simple_transformers.transformer import ModalityEncoder, ModalityEncoderDecoder
-
 
 def classification_train_loop(model, dataset, input_key, use_pil_images=False):
     optimizer = th.optim.Adam(model.parameters(), lr=1e-4)
@@ -41,7 +43,7 @@ def text_gen_train_loop(model, dataset):
         in_string, out_string, gen_string = None, None, None
         for batch in dataloader:
             optimizer.zero_grad()
-            logits, gen_strings = model(batch['translation']['en'], batch['translation']['fr'])
+            _, _, logits, gen_strings = model(batch['translation']['en'], batch['translation']['fr'])
             in_string, out_string, gen_string = batch['translation']['en'][0], batch['translation']['fr'][0], \
             gen_strings[0]
             _, preds = th.max(logits, dim=-1)
@@ -55,9 +57,7 @@ def text_gen_train_loop(model, dataset):
             losses += [loss.item()]
             # accuracies += [th.mean((preds == batch['label']).float()).item()]
         print(f'LOSS: {np.mean(losses)}')  # , ACCURACY: {np.mean(accuracies)}')
-        print(in_string)
-        print(out_string)
-        print(gen_string)
+        print(f'Input: {in_string} | Output: {out_string} | Generated: {gen_string}')
 
 
 def action_gen_train_loop(model, dataset):
@@ -69,12 +69,11 @@ def action_gen_train_loop(model, dataset):
         true_actions, gen_actions = None, None
         for batch in dataloader:
             optimizer.zero_grad()
-            logits, gen_actions = model(batch['init_state']['input'], batch['actions']['input'], None,
-                                        batch['actions']['attention_mask'])
+            _, _, logits, gen_actions = model(batch['init_state']['input'], batch['actions']['input'], None,
+                                              batch['actions']['attention_mask'])
             logits = logits[:, :-1]
             true_actions = batch['actions']['input'][0]
             _, preds = th.max(logits, dim=-1)
-            # TODO labels should no have sos token so that offset exsists
             labels = th.tensor(batch['actions']['input'], device=logits.device)
             batch_size, seq_len = labels.shape
             # TODO: Loss should be masked too
@@ -89,8 +88,7 @@ def action_gen_train_loop(model, dataset):
 
 
 # MNIST, image classification
-def run_mnist():
-    use_pil_images = False
+def run_mnist(use_pil_images = False):
     dataset = load_dataset('mnist', split='train[:1000]')
     dataset.set_format(type='numpy', columns=['image', 'label'])
     dataset_kwargs = {'num_classes': 10, 'image_size': (224, 224), 'patch_size': (16, 16), 'num_channels': 3} \
@@ -129,4 +127,4 @@ def run_traj():
     action_gen_train_loop(model, dataset)
 
 
-run_mnist()
+run_sst2()

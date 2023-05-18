@@ -1,6 +1,5 @@
-
 """
-Taken from: https://github.com/LauraRuis/multimodal_seq2seq_gSCAN/blob/master/read_gscan/read_gscan.py
+Used only for testing purposes
 """
 import argparse
 from enum import IntEnum
