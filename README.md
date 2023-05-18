@@ -1,7 +1,9 @@
 # Simple Transformers
-Simple implementations of transformers to encode and decode most modalities. The transformer, defined in transformer.py 
-and configured using config.yaml, do not change between modalities. The different modalities differ only in their 
-processing, which happens in modality_processors.py. Some basic example using is shown in example_usage.py. NOTE: 
+Simple implementations of transformers to encode and decode most modalities. The transformer, defined in `transformer.py` 
+and configured using `config.yaml`, do not change between modalities. The different modalities differ only in their 
+processing, which happens in `modality_processors.py`. Some basic example using is shown in `example_usage.py`. 
+
+NOTE: 
 the training loops are purely to demonstrate how to use the transformers and should not be used directly.
 
 ## Comparison to Hugging Face
