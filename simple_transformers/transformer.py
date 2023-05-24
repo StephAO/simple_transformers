@@ -135,29 +135,47 @@ class ModalityEncoderDecoder(nn.Module):
         """
         super().__init__()
         self.config = get_config()
-        if input_modality not in DECODER_MODALITY_PROCESSORS:
+        if input_modality not in ENCODER_MODALITY_PROCESSORS:
             raise NotImplementedError(f'A processor for input modality "{input_modality}" has not yet been implemented.'
-                                      f'The following modalities do have processors: {DECODER_MODALITY_PROCESSORS.keys()}.')
+                                      f'The following modalities do have processors: {ENCODER_MODALITY_PROCESSORS.keys()}.')
         if output_modality not in DECODER_MODALITY_PROCESSORS:
             raise NotImplementedError(f'A processor for output modality "{output_modality}" has not yet been implemented.'
                                       f'The following modalities do have processors: {DECODER_MODALITY_PROCESSORS.keys()}.')
-        self.input_preprocessor = DECODER_MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
+        self.input_preprocessor = ENCODER_MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
         self.output_preprocessor = DECODER_MODALITY_PROCESSORS[output_modality](self.config, **kwargs)
         # Encoder
         self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
                                                          batch_first=True)
         self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
-        self.encoder = nn.TransformerEncoder(self.encoder_layer, self.config.n_layers, self.encoder_norm)
+        self.encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
         # Decoder
         self.decoder_layers = nn.TransformerDecoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
                                                          batch_first=True)
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
-        self.decoder = nn.TransformerDecoder(self.decoder_layer, self.config.n_layers, self.decoder_norm)
+        self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
         self._init_parameters()
         self.to(self.config.device)
+
+    def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> th.Tensor:
+        src_embeddings, src_att_mask = self.input_preprocessor(src_input, src_att_mask)
+        output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
+        return output
+
+    def decode(self, encoder_output: th.Tensor, tgt_input: Any, tgt_att_mask: Union[np.array, None] = None) \
+               -> Tuple[th.Tensor, th.Tensor, List[Any]]:
+        tgt_embeddings, tgt_attention_mask = self.output_preprocessor(tgt_input, tgt_att_mask)
+        batch_size, tgt_seq_len, emb_dim = tgt_embeddings.shape
+        causal_mask = self.generate_square_subsequent_mask(tgt_seq_len)
+        decoder_output = self.decoder(tgt_embeddings, encoder_output, tgt_mask=causal_mask,
+                                      tgt_key_padding_mask=tgt_attention_mask.bool())
+
+        # Output should be shape (batch size, seq len, d_model).
+        logits = self.output_preprocessor.output_embeddings_to_logits(decoder_output)
+        generated_output = self.output_preprocessor.logits_to_output(logits)
+        return decoder_output, logits, generated_output
 
     def forward(self, src_input: Any, tgt_input: Any, src_att_mask: Union[np.array, None] = None,
                 tgt_att_mask: Union[np.array, None] = None) -> Tuple[th.Tensor, th.Tensor, th.Tensor, List[Any]]:
@@ -166,18 +184,8 @@ class ModalityEncoderDecoder(nn.Module):
         :param tgt_input: decoder input. Input type depends on the modality being encoded (e.g. for text, use str)
         Returns
         """
-        src_embeddings, src_attention_mask = self.input_preprocessor(src_input, src_att_mask)
-        tgt_embeddings, tgt_attention_mask = self.output_preprocessor(tgt_input, tgt_att_mask)
-        batch_size, tgt_seq_len, emb_dim = tgt_embeddings.shape
-        causal_mask = self.generate_square_subsequent_mask(tgt_seq_len)
-
-        encoder_output = self.encoder(src_embeddings, src_key_padding_mask=src_attention_mask.bool())
-        decoder_output = self.decoder(tgt_embeddings, encoder_output, tgt_mask=causal_mask,
-                                      tgt_key_padding_mask=tgt_attention_mask.bool())
-
-        # Output should be shape (batch size, seq len, d_model).
-        logits = self.output_preprocessor.output_embeddings_to_logits(decoder_output)
-        generated_output = self.output_preprocessor.logits_to_output(logits)
+        encoder_output = self.encode(src_input, src_att_mask)
+        decoder_output, logits, generated_output = self.decode(encoder_output, tgt_input, tgt_att_mask)
         return encoder_output, decoder_output, logits, generated_output
 
     def _init_parameters(self):

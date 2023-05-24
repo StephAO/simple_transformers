@@ -344,6 +344,6 @@ ENCODER_MODALITY_PROCESSORS = {
 
 DECODER_MODALITY_PROCESSORS = {
     'text': TextProcessor,
-    'images': ImageProcessor,
+    'actions': ActionProcessor,
 }
 
