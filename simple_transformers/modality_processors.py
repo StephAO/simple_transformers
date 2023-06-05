@@ -301,7 +301,11 @@ class InitialStateProcessor(Processor):
     """
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
-        self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
+        n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
+        self.state_embeddings = nn.ModuleList(
+            [nn.Linear(
+                *((kwargs['state_size'], config.d_model) if i == 0 else (config.d_model, config.d_model))
+             ) for i in range(n_layers)])
         self.text_processor = TextProcessor(config, **kwargs)
         self.state_type_emb = nn.Parameter(th.randn(config.d_model))
         self.text_type_emb = nn.Parameter(th.randn(config.d_model))
