@@ -61,14 +61,20 @@ class TextProcessor(Processor):
     """
     Processes string text into input embeddings. Uses a pretrained tokenizer from huggingface.
     Attention mask is created by tokenizer.
-    REQUIRES: 'max_text_length' kwarg
+    REQUIRES: 'max_text_length' kwarg.
+              If pretokenizing text, then 'pretokenized', 'vocab_size' and 'pad_token_id' kwargs are also required
     Can be used for generation as well
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config, **kwargs)
-        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", model_max_length=256)
-        self.word_embeddings = nn.Embedding(self.tokenizer.vocab_size, config.d_model,
-                                            padding_idx=self.tokenizer.pad_token_id)
+        if 'pretokenized' in kwargs and kwargs['pretokenized']:
+            self.pretokenized = True
+            vocab_size, pad_token_id = kwargs['vocab_size'], kwargs['pad_token_id']
+        else:
+            self.pretokenized = False
+            self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", model_max_length=256)
+            vocab_size, pad_token_id = self.tokenizer.vocab_size, self.tokenizer.pad_token_id
+        self.word_embeddings = nn.Embedding(vocab_size, config.d_model, padding_idx=pad_token_id)
         self.position_embeddings = nn.Embedding(kwargs['max_text_length'], config.d_model)
         position_ids = th.arange(start=0, end=kwargs['max_text_length'], step=1)
         # register buffer (these are constant tokens and NOT token embeddings)
@@ -80,10 +86,15 @@ class TextProcessor(Processor):
         return {'max_text_length': int}
 
 
-    def forward(self, text: List[str], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
-        tokens = self.tokenizer(text, padding=True, return_tensors='pt')
-        tokens = tokens.to(self.config.device)
-        input_embeds = self.word_embeddings(tokens['input_ids'])
+    def forward(self, text: Union[List[str], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
+        if not self.pretokenized:
+            tok_out = self.tokenizer(text, padding=True, return_tensors='pt')
+            tokens = tok_out['input_ids'].to(self.config.device)
+            att_mask = 1 - tok_out['attention_mask']
+        else:
+            tokens = th.from_numpy(text).to(self.config.device).int()
+            att_mask = th.from_numpy(att_mask).to(self.config.device).int()
+        input_embeds = self.word_embeddings(tokens)
         batch_size, seq_len, _ = input_embeds.shape
         position_embeddings = self.position_embeddings(self.position_ids[:seq_len])
         position_embeddings = position_embeddings.expand(batch_size, seq_len, -1)
@@ -93,15 +104,18 @@ class TextProcessor(Processor):
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
-        return embeddings, 1 - tokens['attention_mask']
+        return embeddings, att_mask
 
-    def output_embeddings_to_logits(self, embs):
+    def output_embeddings_to_logits(self, embs: th.Tensor) -> th.Tensor:
         logits = embs @ th.transpose(self.word_embeddings.weight, 0, 1)
         return logits
 
-    def logits_to_output(self, logits):
+    def logits_to_output(self, logits: th.Tensor) -> Union[th.Tensor, str]:
+        """
+        If pretokenized, return token_ids, otherwise decode using tokenizer
+        """
         _, token_ids = th.max(logits, dim=-1)
-        return self.tokenizer.batch_decode(token_ids)
+        return token_ids if self.pretokenized else self.tokenizer.batch_decode(token_ids)
 
 
 class ImageProcessor(Processor):
@@ -226,7 +240,8 @@ class GridStateProcessor(Processor):
 
     def forward(self, states: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
-        batch_size, traj_length, grid_size, grid_size, _ = states.shape
+        print(states.shape)
+        batch_size, traj_length, *_ = states.shape
         states = th.from_numpy(states).to(self.config.device)
         att_mask = th.from_numpy(att_mask).to(self.config.device).int()
         input_embeds = self.state_embeddings(th.flatten(states, start_dim=2).float())
@@ -241,6 +256,7 @@ class GridStateProcessor(Processor):
 
 class TrajectoryProcessor(Processor):
     """
+    TODO consider stacking states & actions
     Processes a trajectory (sequence of states and actions) into input embeddings.
     Currently, states should be grid world representations.
     Attention mask must be passed in.
@@ -248,7 +264,18 @@ class TrajectoryProcessor(Processor):
     """
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
-        self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
+        n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
+        self.state_embeddings = nn.Sequential(
+            *[l for i in range(n_layers) for l in
+              (nn.Linear(*((kwargs['state_size'], config.d_model) if i == 0 else (config.d_model, config.d_model))),
+               nn.ReLU())
+              ])
+        if 'decoding' in kwargs:
+            self.state_decode_embeddings = nn.Sequential(
+                *[l for i in range(n_layers - 1, -1, -1) for l in
+                  (nn.Linear(*((config.d_model, kwargs['state_size']) if i == 0 else (config.d_model, config.d_model))),
+                   nn.ReLU())
+                  ])
         self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
         self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] * 2 + 1, config.d_model)
         self.cls_embedding = nn.Parameter(th.randn(config.d_model))
@@ -266,13 +293,13 @@ class TrajectoryProcessor(Processor):
         # Move inputs to tensors on the right device
         states, actions = traj
         states_att_mask, actions_att_mask = att_mask
-        batch_size, traj_length, grid_size, grid_size, _ = states.shape
+        batch_size, traj_length, *_ = states.shape
         states = th.from_numpy(states).to(self.config.device)
         actions = th.from_numpy(actions).to(self.config.device).int()
         states_att_mask = th.from_numpy(states_att_mask).to(self.config.device).int()
         actions_att_mask = th.from_numpy(actions_att_mask).to(self.config.device).int()
         # Create joined attention mask
-        mask_sizes = th.sum(states_att_mask, dim=-1, keep_dim=True) + th.sum(actions_att_mask, dim=-1, keep_dim=True)
+        mask_sizes = th.sum(states_att_mask, dim=-1, keepdim=True) + th.sum(actions_att_mask, dim=-1, keepdim=True)
         att_mask = th.zeros((batch_size, traj_length * 2), device=self.config.device, dtype=int)
         att_mask[th.arange(0, traj_length * 2).repeat(batch_size, 1) >= mask_sizes] = 1
         # Embed states and actions
@@ -290,6 +317,21 @@ class TrajectoryProcessor(Processor):
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
+
+    def output_embeddings_to_logits(self, embs):
+        # embs is a sequence of states/actions, each having to be decoded in different ways
+        # 1. Split states and actions (skip first token whic is cls token)
+        states_embs, action_embs = embs[:, 1::2], embs[:, 2::2]
+        # 2. Decode each accordingly
+        state_logits = self.state_decode_embeddings(states_embs)
+        action_logits = action_embs @ th.transpose(self.action_embeddings.weight, 0, 1)
+        return (state_logits, action_logits)
+
+    def logits_to_output(self, logits):
+        state_logits, action_logits = logits
+        _, action_ids = th.max(action_logits, dim=-1)
+        return (state_logits, action_ids)
+
 
 class InitialStateProcessor(Processor):
     """

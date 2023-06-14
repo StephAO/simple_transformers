@@ -56,6 +56,11 @@ class ModalityEncoder(nn.Module):
         # TODO return encoder output
         return logits
 
+    def reconstruct_input_from_embeddings(self, embeddings: th.Tensor) -> Tuple[th.Tensor, Any]:
+        logits = self.preprocessor.output_embeddings_to_logits(embeddings)
+        output = self.preprocessor.logits_to_output(logits)
+        return logits, output
+
     def _init_parameters(self):
         r"""Initiate parameters in the transformer model."""
         for p in self.parameters():
