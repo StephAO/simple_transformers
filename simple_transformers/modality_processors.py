@@ -1,8 +1,3 @@
-"""
-All processors can be used for encoding.
-Only processors with 'output_embeddings_to_logits' and 'logits_to_output' functions can be used for decoding.
-Currently, this only includes TextProcessor and ActionProcessor
-"""
 from abc import ABC, abstractmethod
 import math
 import numpy as np
@@ -56,6 +51,9 @@ class Processor(nn.Module, ABC):
                 raise TypeError(f'{self.__class__.__name__} keyword argument: "{key}" must be of type {value} and not '
                                 f'{type(kwargs[key])}')
 
+    def get_embedding_weights(self) -> th.Tensor:
+        raise ValueError('Currently not implemented')
+
 
 class TextProcessor(Processor):
     """
@@ -106,16 +104,16 @@ class TextProcessor(Processor):
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
 
-    def output_embeddings_to_logits(self, embs: th.Tensor) -> th.Tensor:
-        logits = embs @ th.transpose(self.word_embeddings.weight, 0, 1)
-        return logits
+    def get_embedding_weights(self) -> th.Tensor:
+        return self.word_embeddings.weight
 
-    def logits_to_output(self, logits: th.Tensor) -> Union[th.Tensor, str]:
+    def decode(self, token_ids: th.Tensor) -> Union[th.Tensor, str]:
         """
         If pretokenized, return token_ids, otherwise decode using tokenizer
         """
-        _, token_ids = th.max(logits, dim=-1)
-        return token_ids if self.pretokenized else self.tokenizer.batch_decode(token_ids)
+        if self.pretokenized:
+            raise ValueError('Tokens were pretokenized using a tokenizer defined elsewhere')
+        return self.tokenizer.batch_decode(token_ids)
 
 
 class ImageProcessor(Processor):
@@ -210,13 +208,8 @@ class ActionProcessor(Processor):
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
 
-    def output_embeddings_to_logits(self, embs):
-        logits = embs @ th.transpose(self.action_embeddings.weight, 0, 1)
-        return logits
-
-    def logits_to_output(self, logits):
-        _, action_ids = th.max(logits, dim=-1)
-        return action_ids
+    def get_embedding_weights(self) -> th.Tensor:
+        return self.word_embeddings.weight
 
 class GridStateProcessor(Processor):
     """
@@ -318,19 +311,22 @@ class TrajectoryProcessor(Processor):
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
 
-    def output_embeddings_to_logits(self, embs):
-        # embs is a sequence of states/actions, each having to be decoded in different ways
-        # 1. Split states and actions (skip first token whic is cls token)
-        states_embs, action_embs = embs[:, 1::2], embs[:, 2::2]
-        # 2. Decode each accordingly
-        state_logits = self.state_decode_embeddings(states_embs)
-        action_logits = action_embs @ th.transpose(self.action_embeddings.weight, 0, 1)
-        return (state_logits, action_logits)
+    def get_embedding_weights(self) -> th.Tensor:
+        return self.word_embeddings.weight
 
-    def logits_to_output(self, logits):
-        state_logits, action_logits = logits
-        _, action_ids = th.max(action_logits, dim=-1)
-        return (state_logits, action_ids)
+    # def output_embeddings_to_logits(self, embs):
+    #     # embs is a sequence of states/actions, each having to be decoded in different ways
+    #     # 1. Split states and actions (skip first token whic is cls token)
+    #     states_embs, action_embs = embs[:, 1::2], embs[:, 2::2]
+    #     # 2. Decode each accordingly
+    #     state_logits = self.state_decode_embeddings(states_embs)
+    #     action_logits = action_embs @ th.transpose(self.action_embeddings.weight, 0, 1)
+    #     return (state_logits, action_logits)
+    #
+    # def logits_to_output(self, logits):
+    #     state_logits, action_logits = logits
+    #     _, action_ids = th.max(action_logits, dim=-1)
+    #     return (state_logits, action_ids)
 
 
 class InitialStateProcessor(Processor):

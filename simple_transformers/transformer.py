@@ -2,9 +2,10 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 from simple_transformers.modality_processors import ENCODER_MODALITY_PROCESSORS, DECODER_MODALITY_PROCESSORS
+from simple_transformers.transformer_heads import TransformHead, ClassificationHead, ReconstructionHead
 from simple_transformers.utils import _init_weights, get_config
 
-from typing import Any, Union, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 
 class ModalityEncoder(nn.Module):
@@ -13,7 +14,7 @@ class ModalityEncoder(nn.Module):
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
                          See ENCODER_MODALITY_PROCESSORS in simple_transformers.modality_processors for all options
-        :param num_classes: int or None. If int, creates a linear layer to output class logits
+        :param num_classes: If int, creates a classification transformer head
         :param kwargs: kwargs that define the data. Requirements vary by dataset and modality
         """
         super().__init__()
@@ -27,15 +28,21 @@ class ModalityEncoder(nn.Module):
                                                          batch_first=True)
         self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
-        self.num_classes = None
+
+        self.heads = {}
+        if True: # TODO
+            self.heads['trans'] = TransformHead(self.config)
+        if modality == 'text': # TODO
+            self.heads['reconst'] = ReconstructionHead(self.config, self.preprocessor.get_embedding_weights())
         if 'num_classes' in kwargs:
-            self.num_classes = kwargs['num_classes']
-            self.classifier = nn.Linear(self.config.d_model, self.num_classes)
+            self.heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
+
+        self.heads = nn.ModuleDict(self.heads)
+
         self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None,
-                return_full_output=False) -> th.Tensor:
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Dict[str, Any]:
         """
         :param model_input: input modality. Input type depends on the modality being encoded (e.g. for text, use str)
         :param attention_mask: Attention mask on input modality. None if attention mask is dealt using modalit processor
@@ -46,20 +53,25 @@ class ModalityEncoder(nn.Module):
         """
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask)
         output = self.transformer_encoder(embeddings, src_key_padding_mask=attention_mask.bool())
-        if return_full_output:
-            return output
-        # Output should be shape (batch size, seq len, d_model). Take first token (cls token) for each to return
-        mod_emb = output[:, 0, :]
-        if self.num_classes is None:
-            return mod_emb
-        logits = self.classifier(mod_emb)
-        # TODO return encoder output
-        return logits
+        return_embs = {'none': output}
+        for key in self.heads:
+            if key == 'cls':
+                return_embs[key] = self.heads[key](output[:, 0, :])
+            return_embs[key] = self.heads[key](output)
+        return return_embs
 
     def reconstruct_input_from_embeddings(self, embeddings: th.Tensor) -> Tuple[th.Tensor, Any]:
         logits = self.preprocessor.output_embeddings_to_logits(embeddings)
         output = self.preprocessor.logits_to_output(logits)
         return logits, output
+
+    def output_embeddings_to_logits(self, embs):
+        logits = embs @ th.transpose(self.action_embeddings.weight, 0, 1)
+        return logits
+
+    def logits_to_output(self, logits):
+        _, action_ids = th.max(logits, dim=-1)
+        return action_ids
 
     def _init_parameters(self):
         r"""Initiate parameters in the transformer model."""
@@ -135,7 +147,6 @@ class ModalityEncoderDecoder(nn.Module):
                                See ENCODER_MODALITY_PROCESSORS in simple_transformers.modality_processors for all options
         :param output_modality: A string defining kind of modality to encode. e.g. "text" or "images".
                                 See DECODER_MODALITY_PROCESSORS in simple_transformers.modality_processors for all options
-        :param num_classes: int or None. If int, creates a linear layer to output class logits
         :param kwargs: kwargs that define the data. Requirements vary by dataset and modality
         """
         super().__init__()
