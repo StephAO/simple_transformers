@@ -375,7 +375,7 @@ class InitialStateProcessor(Processor):
         return embeddings, att_mask
 
 
-ENCODER_MODALITY_PROCESSORS = {
+MODALITY_PROCESSORS = {
     'text': TextProcessor,
     'images': ImageProcessor,
     'actions': ActionProcessor,
@@ -383,9 +383,3 @@ ENCODER_MODALITY_PROCESSORS = {
     'trajs': TrajectoryProcessor,
     'init_state': InitialStateProcessor
 }
-
-DECODER_MODALITY_PROCESSORS = {
-    'text': TextProcessor,
-    'actions': ActionProcessor,
-}
-

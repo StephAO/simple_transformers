@@ -47,7 +47,7 @@ def text_gen_train_loop(model, dataset):
             in_string, out_string, gen_string = batch['translation']['en'][0], batch['translation']['fr'][0], \
             gen_strings[0]
             _, preds = th.max(logits, dim=-1)
-            labels = model.output_preprocessor.tokenizer(batch['translation']['fr'], padding=True, return_tensors='pt')[
+            labels = model.preprocessor.tokenizer(batch['translation']['fr'], padding=True, return_tensors='pt')[
                 'input_ids']
             batch_size, seq_len = labels.shape
             # TODO: Loss should be masked too
