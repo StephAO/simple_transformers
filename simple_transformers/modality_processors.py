@@ -82,6 +82,10 @@ class TextProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'max_text_length': int}
+    
+    @staticmethod
+    def get_reconstruction_types() -> List[str]:
+        return ['tok_reconst']
 
 
     def forward(self, text: Union[List[str], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
@@ -144,6 +148,11 @@ class ImageProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'image_size': int, 'patch_size': int, 'num_channels': int}
+    
+    @staticmethod
+    def get_reconstruction_types() -> List[str]:
+        # TODO not yet implemented
+        return ['deconv_reconst']
 
     def forward(self, images: Union[List[Image], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
         """
@@ -191,6 +200,11 @@ class ActionProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'num_actions': int, 'max_seq_length': int}
+    
+    @staticmethod
+    def get_reconstruction_types() -> List[str]:
+        # TODO not yet implemented
+        return ['tok_reconst']
 
     def forward(self, actions: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
@@ -230,10 +244,14 @@ class GridStateProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'state_size': int, 'max_seq_length': int}
+    
+    @staticmethod
+    def get_reconstruction_types() -> List[str]:
+        # TODO not yet implemented
+        return ['lin_reconst']
 
     def forward(self, states: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
-        print(states.shape)
         batch_size, traj_length, *_ = states.shape
         states = th.from_numpy(states).to(self.config.device)
         att_mask = th.from_numpy(att_mask).to(self.config.device).int()
@@ -280,6 +298,11 @@ class TrajectoryProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'state_size': int, 'max_seq_length': int}
+    
+    @staticmethod
+    def get_reconstruction_types() -> List[str]:
+        # TODO not yet implemented
+        return ['tok_reconst', 'lin_reconst']
 
     def forward(self, traj: Tuple[np.array, np.array], att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
@@ -352,6 +375,11 @@ class InitialStateProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'state_size': int, 'max_text_length': int}
+    
+    @staticmethod
+    def get_reconstruction_types() -> List[str]:
+        # TODO not yet implemented
+        return ['tok_reconst', 'lin_reconst']
 
     def forward(self, init_state: Tuple[np.array, str], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
         # Move things to tensors on the right device

@@ -16,9 +16,9 @@ class TransformHead(nn.Module):
         return self.head(hidden_states)
 
 
-class ReconstructionHead(nn.Module):
+class LinearReconstructionHead(nn.Module):
     def __init__(self, config, out_size=None, act_fn=nn.Tanh, out_scale=1, **kwargs):
-        super(ReconstructionHead, self).__init__()
+        super(LinearReconstructionHead, self).__init__()
         assert out_size is not None
         self.transform_head = TransformHead(config)
         self.decoder = nn.Sequential(nn.Linear(config.d_model, out_size),

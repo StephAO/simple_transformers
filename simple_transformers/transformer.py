@@ -3,7 +3,7 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 from simple_transformers.modality_processors import MODALITY_PROCESSORS
-from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, ReconstructionHead
+from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, LinearReconstructionHead
 from simple_transformers.utils import _init_weights, get_config
 
 from typing import Any, Dict, List, Tuple, Union
@@ -15,10 +15,15 @@ class TransformerMixin(object):
         if True: # TODO
             self.heads['trans'] = TransformHead(self.config)
         if 'reconst' in kwargs:
-            assert 'state_size' in kwargs
-            self.heads['reconst'] = ReconstructionHead(self.config, out_size=kwargs['state_size'], **kwargs)
-        if 'tok_reconst' in kwargs: # TODO
-            self.heads['tok_reconst'] = TokenReconstructionHead(self.config, self.preprocessor.get_embedding_weights())
+            for reconst_type in self.preprocessor.get_reconstruction_types():
+                if reconst_type == 'lin_reconst':
+                    assert 'state_size' in kwargs
+                    self.heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=kwargs['state_size'], **kwargs)
+                elif reconst_type == 'tok_reconst': # TODO
+                    self.heads['tok_reconst'] = TokenReconstructionHead(self.config, self.preprocessor.get_embedding_weights())
+                elif reconst_type == 'deconv_reconst':
+                    # TODO implement deconv head
+                    raise NotImplementedError('Deconvolution reconstruction head not yet implemented')
         if 'num_classes' in kwargs:
             self.heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
         self.heads = nn.ModuleDict(self.heads)
