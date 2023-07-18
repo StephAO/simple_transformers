@@ -209,7 +209,7 @@ class ActionProcessor(Processor):
         return embeddings, att_mask
 
     def get_embedding_weights(self) -> th.Tensor:
-        return self.word_embeddings.weight
+        return self.action_embeddings.weight
 
 class GridStateProcessor(Processor):
     """
@@ -312,7 +312,7 @@ class TrajectoryProcessor(Processor):
         return embeddings, att_mask
 
     def get_embedding_weights(self) -> th.Tensor:
-        return self.word_embeddings.weight
+        return self.action_embeddings.weight
 
     # def output_embeddings_to_logits(self, embs):
     #     # embs is a sequence of states/actions, each having to be decoded in different ways
