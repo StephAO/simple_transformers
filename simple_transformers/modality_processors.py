@@ -9,6 +9,8 @@ from transformers import CLIPTokenizer, CLIPImageProcessor
 from types import SimpleNamespace
 from typing import Union, List, Tuple, Any
 
+from simple_transformers.utils import CNNEncoder, CNNDecoder
+
 class Processor(nn.Module, ABC):
     def __init__(self, config: SimpleNamespace, **kwargs):
         """
@@ -229,11 +231,12 @@ class GridStateProcessor(Processor):
     """
     Processes a grid world representation into input embeddings.
     Attention mask must be passed in.
-    REQUIRES: 'state_size', 'max_seq_length' kwargs.
+    REQUIRES: 'state_shape', 'max_seq_length' kwargs.
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config, **kwargs)
-        self.state_embeddings = nn.Linear(kwargs['state_size'], config.d_model)
+        input_size = np.prod(kwargs['state_shape'])
+        self.state_embeddings = nn.Linear(input_size, config.d_model)
         self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.d_model)
         self.cls_embedding = nn.Parameter(th.randn(config.d_model))
         position_ids = th.arange(start=0, end=kwargs['max_seq_length'] + 1, step=1)
@@ -243,7 +246,7 @@ class GridStateProcessor(Processor):
 
     @staticmethod
     def required_attributes() -> dict:
-        return {'state_size': int, 'max_seq_length': int}
+        return {'state_shape': List, 'max_seq_length': int}
     
     @staticmethod
     def get_reconstruction_types() -> List[str]:
@@ -271,20 +274,20 @@ class TrajectoryProcessor(Processor):
     Processes a trajectory (sequence of states and actions) into input embeddings.
     Currently, states should be grid world representations.
     Attention mask must be passed in.
-    REQUIRES: 'state_size', 'max_seq_length' kwargs.
+    REQUIRES: 'state_shape', 'max_seq_length' kwargs.
     """
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
         n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
-        self.state_embeddings = nn.Sequential(
-            *[l for i in range(n_layers) for l in
-              (nn.Linear(*((kwargs['state_size'], config.d_model) if i == 0 else (config.d_model, config.d_model))),
-               nn.ReLU())
-              ])
-        if 'decoding' in kwargs:
-            self.state_decode_embeddings = nn.Sequential(
-                *[l for i in range(n_layers - 1, -1, -1) for l in
-                  (nn.Linear(*((config.d_model, kwargs['state_size']) if i == 0 else (config.d_model, config.d_model))),
+        if 'use_cnn' in kwargs and kwargs['use_cnn']:
+            # assert in kwargs
+            self.state_embeddings = CNNEncoder(kwargs['state_shape'], config.d_model)
+        else:
+            input_size = np.prod(kwargs['state_shape'])
+            self.state_embeddings = nn.Sequential(
+                nn.Flatten(start_dim=2),
+                *[l for i in range(n_layers) for l in
+                  (nn.Linear(*((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))),
                    nn.ReLU())
                   ])
         self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
@@ -297,7 +300,7 @@ class TrajectoryProcessor(Processor):
 
     @staticmethod
     def required_attributes() -> dict:
-        return {'state_size': int, 'max_seq_length': int}
+        return {'state_shape': List, 'max_seq_length': int}
     
     @staticmethod
     def get_reconstruction_types() -> List[str]:
@@ -319,7 +322,8 @@ class TrajectoryProcessor(Processor):
         att_mask = th.zeros((batch_size, traj_length * 2), device=self.config.device, dtype=int)
         att_mask[th.arange(0, traj_length * 2, device=self.config.device).repeat(batch_size, 1) >= mask_sizes] = 1
         # Embed states and actions
-        state_embeds = self.state_embeddings(th.flatten(states, start_dim=2).float())
+
+        state_embeds = self.state_embeddings(states.float())
         action_embeds = self.action_embeddings(actions)
         # Interleaves states and actions
         input_embeds = th.stack((state_embeds, action_embeds), dim=2).reshape(batch_size, 2 * traj_length, -1)
@@ -336,6 +340,9 @@ class TrajectoryProcessor(Processor):
 
     def get_embedding_weights(self) -> th.Tensor:
         return self.action_embeddings.weight
+
+    def get_encoder_intermediate_shapes(self) -> Tuple[Any, Any]:
+        return self.state_embeddings.flattened_shape, self.state_embeddings.intermediate_shape
 
     # def output_embeddings_to_logits(self, embs):
     #     # embs is a sequence of states/actions, each having to be decoded in different ways
@@ -358,14 +365,15 @@ class InitialStateProcessor(Processor):
     Currently, this should be a tuple of a grid world representation and a string describing the mission
     State always has length of 1, so attention mask is calculated by increasing the length of the text
     attention mask by 1
-    REQUIRES: 'state_size', 'max_text_length' kwargs.
+    REQUIRES: 'state_shape', 'max_text_length' kwargs.
     """
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
         n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
+        input_size = np.prod(kwargs['state_shape'])
         self.state_embeddings = nn.ModuleList(
             [nn.Linear(
-                *((kwargs['state_size'], config.d_model) if i == 0 else (config.d_model, config.d_model))
+                *((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))
              ) for i in range(n_layers)])
         self.text_processor = TextProcessor(config, **kwargs)
         self.state_type_emb = nn.Parameter(th.randn(config.d_model))
@@ -374,7 +382,7 @@ class InitialStateProcessor(Processor):
 
     @staticmethod
     def required_attributes() -> dict:
-        return {'state_size': int, 'max_text_length': int}
+        return {'state_shape': Tuple[int], 'max_text_length': int}
     
     @staticmethod
     def get_reconstruction_types() -> List[str]:

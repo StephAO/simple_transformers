@@ -73,7 +73,7 @@ class gSCAN(Dataset):
             traj = data_file.read(self.offsets[1])
             _, _, states = json.loads(traj)
         return {'modalities': self.modalities, 'num_actions': len(Actions),
-                'state_size': np.prod(np.shape(states[0])), 'max_seq_length': self.max_traj_length,
+                'state_shape': np.shape(states[0]), 'max_seq_length': self.max_traj_length,
                 'max_text_length': 64}
 
     def get_all_labels(self):

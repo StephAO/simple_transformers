@@ -1,6 +1,8 @@
 import torch as th
 import torch.nn as nn
 
+from simple_transformers.utils import CNNDecoder
+
 
 class TransformHead(nn.Module):
     def __init__(self, config, input_size=None, **kwargs):
@@ -30,6 +32,18 @@ class LinearReconstructionHead(nn.Module):
         hidden_states = self.decoder(hidden_states) * self.out_scale
         return hidden_states
 
+class DeconvReconstructionHead(nn.Module):
+    def __init__(self, config, enc_output_shape, enc_flattened_shape, out_scale=1):
+        super(DeconvReconstructionHead, self).__init__()
+        self.transform_head = TransformHead(config)
+        self.decoder = CNNDecoder(config.d_model, cnn_output_shape=enc_output_shape,
+                                  cnn_flattened_shape=enc_flattened_shape)
+        self.out_scale = out_scale
+
+    def forward(self, hidden_states):
+        hidden_states = self.transform_head(hidden_states)
+        hidden_states = self.decoder(hidden_states) * self.out_scale
+        return hidden_states
 
 class TokenReconstructionHead(nn.Module):
     def __init__(self, config, embedding_weights, input_size=None, **kwargs):

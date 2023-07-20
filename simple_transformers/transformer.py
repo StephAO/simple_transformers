@@ -3,7 +3,8 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 from simple_transformers.modality_processors import MODALITY_PROCESSORS
-from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, LinearReconstructionHead
+from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, \
+    LinearReconstructionHead, DeconvReconstructionHead
 from simple_transformers.utils import _init_weights, get_config
 
 from typing import Any, Dict, List, Tuple, Union
@@ -12,18 +13,20 @@ from typing import Any, Dict, List, Tuple, Union
 class TransformerMixin(object):
     def setup_heads(self, **kwargs):
         self.heads = {}
-        if True: # TODO
+        if True:  # TODO
             self.heads['trans'] = TransformHead(self.config)
         if 'reconst' in kwargs:
             for reconst_type in self.preprocessor.get_reconstruction_types():
                 if reconst_type == 'lin_reconst':
-                    assert 'state_size' in kwargs
-                    self.heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=kwargs['state_size'], **kwargs)
-                elif reconst_type == 'tok_reconst': # TODO
-                    self.heads['tok_reconst'] = TokenReconstructionHead(self.config, self.preprocessor.get_embedding_weights())
+                    assert 'state_shape' in kwargs
+                    out_size = np.prod(kwargs['state_shape'])
+                    self.heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=out_size, **kwargs)
+                elif reconst_type == 'tok_reconst':
+                    emb_weights = self.preprocessor.get_embedding_weights()
+                    self.heads['tok_reconst'] = TokenReconstructionHead(self.config, emb_weights)
                 elif reconst_type == 'deconv_reconst':
-                    # TODO implement deconv head
-                    raise NotImplementedError('Deconvolution reconstruction head not yet implemented')
+                    cnn_out_shape, cnn_flat_shape = self.preprocessor.get_encoder_intermediate_shapes()
+                    self.heads['tok_reconst'] = DeconvReconstructionHead(self.config, cnn_out_shape, cnn_flat_shape)
         if 'num_classes' in kwargs:
             self.heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
         self.heads = nn.ModuleDict(self.heads)
@@ -93,6 +96,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
                 return_embs[key] = self.heads[key](output[:, 0, :])
             return_embs[key] = self.heads[key](output)
         return return_embs
+
 
 class ModalityDecoder(nn.Module, TransformerMixin):
     def __init__(self, modality: str, **kwargs):
@@ -190,7 +194,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         return return_embs
 
     def decode(self, encoder_output: th.Tensor, tgt_input: Any, tgt_att_mask: Union[np.array, None] = None) \
-               -> Dict[str, th.Tensor]:
+            -> Dict[str, th.Tensor]:
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
         tgt_embeddings, tgt_attention_mask = self.output_preprocessor(tgt_input, tgt_att_mask)
         batch_size, tgt_seq_len, emb_dim = tgt_embeddings.shape
