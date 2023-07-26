@@ -11,25 +11,24 @@ from typing import Any, Dict, List, Tuple, Union
 
 
 class TransformerMixin(object):
-    def setup_heads(self, **kwargs):
-        self.heads = {}
-        if True:  # TODO
-            self.heads['trans'] = TransformHead(self.config)
+    def setup_heads(self, preprocessor, **kwargs):
+        heads = {}
+        heads['trans'] = TransformHead(self.config)
         if 'reconst' in kwargs:
-            for reconst_type in self.preprocessor.get_reconstruction_types():
+            for reconst_type in preprocessor.get_reconstruction_types():
                 if reconst_type == 'lin_reconst':
                     assert 'state_shape' in kwargs
                     out_size = np.prod(kwargs['state_shape'])
-                    self.heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=out_size, **kwargs)
+                    heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=out_size, **kwargs)
                 elif reconst_type == 'tok_reconst':
-                    emb_weights = self.preprocessor.get_embedding_weights()
-                    self.heads['tok_reconst'] = TokenReconstructionHead(self.config, emb_weights)
+                    emb_weights = preprocessor.get_embedding_weights()
+                    heads['tok_reconst'] = TokenReconstructionHead(self.config, emb_weights)
                 elif reconst_type == 'deconv_reconst':
-                    cnn_out_shape, cnn_flat_shape = self.preprocessor.get_encoder_intermediate_shapes()
-                    self.heads['tok_reconst'] = DeconvReconstructionHead(self.config, cnn_out_shape, cnn_flat_shape)
+                    cnn_in_shape, cnn_out_shape, cnn_flat_shape = preprocessor.get_encoder_intermediate_shapes()
+                    heads['deconv_reconst'] = DeconvReconstructionHead(self.config, cnn_in_shape, cnn_out_shape, cnn_flat_shape)
         if 'num_classes' in kwargs:
-            self.heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
-        self.heads = nn.ModuleDict(self.heads)
+            heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
+        return nn.ModuleDict(heads)
 
     def check_modalities(self, modalities):
         for modality in modalities:
@@ -74,7 +73,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
 
-        self.setup_heads(**kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -91,10 +90,10 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask)
         output = self.transformer_encoder(embeddings, src_key_padding_mask=attention_mask.bool())
         return_embs = {'none': output}
-        for key in self.heads:
+        for key in self.encoder_heads:
             if key == 'cls':
-                return_embs[key] = self.heads[key](output[:, 0, :])
-            return_embs[key] = self.heads[key](output)
+                return_embs[key] = self.encoder_heads[key](output[:, 0, :])
+            return_embs[key] = self.encoder_heads[key](output)
         return return_embs
 
 
@@ -117,7 +116,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        self.setup_heads(**kwargs)
+        self.decoder_heads = self.setup_heads(self.preprocessor, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -138,10 +137,10 @@ class ModalityDecoder(nn.Module, TransformerMixin):
                                       tgt_key_padding_mask=tgt_attention_mask.bool())
 
         return_embs = {'none': decoder_output}
-        for key in self.heads:
+        for key in self.decoder_heads:
             if key == 'cls':
-                return_embs[key] = self.heads[key](decoder_output[:, 0, :])
-            return_embs[key] = self.heads[key](decoder_output)
+                return_embs[key] = self.decoder_heads[key](decoder_output[:, 0, :])
+            return_embs[key] = self.decoder_heads[key](decoder_output)
 
         # Output should be shape (batch size, seq len, d_model).
         return return_embs
@@ -176,7 +175,8 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        self.setup_heads(**kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, **kwargs)
+        self.decoder_heads = self.setup_heads(self.output_preprocessor, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -186,10 +186,10 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
 
         return_embs = {'none': output}
-        for key in self.heads:
+        for key in self.encoder_heads:
             if key == 'cls':
-                return_embs[key] = self.heads[key](output[:, 0, :])
-            return_embs[key] = self.heads[key](output)
+                return_embs[key] = self.encoder_heads[key](output[:, 0, :])
+            return_embs[key] = self.encoder_heads[key](output)
 
         return return_embs
 
@@ -204,10 +204,10 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
                                       tgt_key_padding_mask=tgt_attention_mask.bool())
 
         return_embs = {'none': decoder_output}
-        for key in self.heads:
+        for key in self.decoder_heads:
             if key == 'cls':
-                return_embs[key] = self.heads[key](decoder_output[:, 0, :])
-            return_embs[key] = self.heads[key](decoder_output)
+                return_embs[key] = self.decoder_heads[key](decoder_output[:, 0, :])
+            return_embs[key] = self.decoder_heads[key](decoder_output)
 
         return return_embs
 

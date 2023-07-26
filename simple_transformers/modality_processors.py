@@ -85,8 +85,7 @@ class TextProcessor(Processor):
     def required_attributes() -> dict:
         return {'max_text_length': int}
     
-    @staticmethod
-    def get_reconstruction_types() -> List[str]:
+    def get_reconstruction_types(self) -> List[str]:
         return ['tok_reconst']
 
 
@@ -151,8 +150,7 @@ class ImageProcessor(Processor):
     def required_attributes() -> dict:
         return {'image_size': int, 'patch_size': int, 'num_channels': int}
     
-    @staticmethod
-    def get_reconstruction_types() -> List[str]:
+    def get_reconstruction_types(self) -> List[str]:
         # TODO not yet implemented
         return ['deconv_reconst']
 
@@ -203,9 +201,7 @@ class ActionProcessor(Processor):
     def required_attributes() -> dict:
         return {'num_actions': int, 'max_seq_length': int}
     
-    @staticmethod
-    def get_reconstruction_types() -> List[str]:
-        # TODO not yet implemented
+    def get_reconstruction_types(self) -> List[str]:
         return ['tok_reconst']
 
     def forward(self, actions: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
@@ -248,9 +244,7 @@ class GridStateProcessor(Processor):
     def required_attributes() -> dict:
         return {'state_shape': List, 'max_seq_length': int}
     
-    @staticmethod
-    def get_reconstruction_types() -> List[str]:
-        # TODO not yet implemented
+    def get_reconstruction_types(self) -> List[str]:
         return ['lin_reconst']
 
     def forward(self, states: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
@@ -279,7 +273,8 @@ class TrajectoryProcessor(Processor):
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
         n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
-        if 'use_cnn' in kwargs and kwargs['use_cnn']:
+        self.use_cnn = 'use_cnn' in kwargs and kwargs['use_cnn']
+        if self.use_cnn:
             # assert in kwargs
             self.state_embeddings = CNNEncoder(kwargs['state_shape'], config.d_model)
         else:
@@ -302,10 +297,8 @@ class TrajectoryProcessor(Processor):
     def required_attributes() -> dict:
         return {'state_shape': List, 'max_seq_length': int}
     
-    @staticmethod
-    def get_reconstruction_types() -> List[str]:
-        # TODO not yet implemented
-        return ['tok_reconst', 'lin_reconst']
+    def get_reconstruction_types(self) -> List[str]:
+        return ['tok_reconst', 'deconv_reconst'] if self.use_cnn else ['tok_reconst', 'lin_reconst']
 
     def forward(self, traj: Tuple[np.array, np.array], att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
@@ -341,8 +334,8 @@ class TrajectoryProcessor(Processor):
     def get_embedding_weights(self) -> th.Tensor:
         return self.action_embeddings.weight
 
-    def get_encoder_intermediate_shapes(self) -> Tuple[Any, Any]:
-        return self.state_embeddings.flattened_shape, self.state_embeddings.intermediate_shape
+    def get_encoder_intermediate_shapes(self) -> Tuple[Any, Any, Any]:
+        return self.state_embeddings.initial_shape, self.state_embeddings.intermediate_shape, self.state_embeddings.flattened_shape
 
     # def output_embeddings_to_logits(self, embs):
     #     # embs is a sequence of states/actions, each having to be decoded in different ways
@@ -383,9 +376,8 @@ class InitialStateProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'state_shape': Tuple[int], 'max_text_length': int}
-    
-    @staticmethod
-    def get_reconstruction_types() -> List[str]:
+
+    def get_reconstruction_types(self) -> List[str]:
         # TODO not yet implemented
         return ['tok_reconst', 'lin_reconst']
 

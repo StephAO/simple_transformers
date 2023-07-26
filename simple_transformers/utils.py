@@ -24,7 +24,7 @@ def get_output_shape(model, image_dim):
 class CNNEncoder(nn.Module):
     def __init__(self, input_shape, hidden_dim):
         super().__init__()
-
+        self.initial_shape = input_shape
         # CNN
         self.cnn = nn.Sequential(
             nn.Conv2d(3, 8, 3, stride=2, padding=1),
@@ -53,12 +53,12 @@ class CNNEncoder(nn.Module):
 
 class CNNDecoder(nn.Module):
 
-    def __init__(self, hidden_dim, cnn_output_shape, cnn_flattened_shape):
+    def __init__(self, hidden_dim, cnn_in_shape, cnn_output_shape, cnn_flattened_shape):
         super().__init__()
         self.linear = nn.Linear(hidden_dim, cnn_flattened_shape)
         self.unflatten = nn.Unflatten(dim=1, unflattened_size=cnn_output_shape)
         self.deconv = nn.Sequential(
-            nn.ConvTranspose2d(32, 16, 3, stride=2, output_padding=0),
+            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=0, output_padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(True),
             nn.ConvTranspose2d(16, 8, 3, stride=2, padding=1, output_padding=1),
@@ -66,9 +66,19 @@ class CNNDecoder(nn.Module):
             nn.ReLU(True),
             nn.ConvTranspose2d(8, 3, 3, stride=2, padding=1, output_padding=1)
         )
+        self.final_shape = cnn_in_shape
 
     def forward(self, z):
-        return th.sigmoid(self.deconv(self.unflatten(self.linear(z))))
+        is_seq = (len(z.shape) == 3)
+        if is_seq:
+            batch_size, seq_len, *rem_shape = z.shape
+            z = z.reshape(batch_size * seq_len, *rem_shape)
+        z = self.linear(z)
+        z = self.unflatten(z)
+        z = self.deconv(z)
+        if is_seq:
+            z = z.reshape(batch_size, seq_len, *self.final_shape)
+        return th.sigmoid(z) # self.deconv(self.unflatten(self.linear(z)))
 
 
 def get_config():

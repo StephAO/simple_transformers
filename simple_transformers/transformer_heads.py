@@ -33,11 +33,11 @@ class LinearReconstructionHead(nn.Module):
         return hidden_states
 
 class DeconvReconstructionHead(nn.Module):
-    def __init__(self, config, enc_output_shape, enc_flattened_shape, out_scale=1):
+    def __init__(self, config, cnn_in_shape, enc_output_shape, enc_flattened_shape, out_scale=1):
         super(DeconvReconstructionHead, self).__init__()
         self.transform_head = TransformHead(config)
-        self.decoder = CNNDecoder(config.d_model, cnn_output_shape=enc_output_shape,
-                                  cnn_flattened_shape=enc_flattened_shape)
+        self.decoder = CNNDecoder(config.d_model, cnn_in_shape=cnn_in_shape,
+                                  cnn_output_shape=enc_output_shape, cnn_flattened_shape=enc_flattened_shape)
         self.out_scale = out_scale
 
     def forward(self, hidden_states):
