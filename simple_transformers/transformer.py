@@ -2,6 +2,8 @@ from abc import ABC
 import numpy as np
 import torch as th
 import torch.nn as nn
+from transformers import RobertaConfig, RobertaTokenizer, RobertaForMaskedLM
+
 from simple_transformers.modality_processors import MODALITY_PROCESSORS
 from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, \
     LinearReconstructionHead, DeconvReconstructionHead
@@ -14,7 +16,7 @@ class TransformerMixin(object):
     def setup_heads(self, preprocessor, **kwargs):
         heads = {}
         heads['trans'] = TransformHead(self.config)
-        if 'reconst' in kwargs:
+        if 'reconst' in kwargs and kwargs['reconst']:
             for reconst_type in preprocessor.get_reconstruction_types():
                 if reconst_type == 'lin_reconst':
                     assert 'state_shape' in kwargs
@@ -147,7 +149,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
 
 class ModalityEncoderDecoder(nn.Module, TransformerMixin):
-    def __init__(self, input_modality: str, output_modality: str, **kwargs):
+    def __init__(self, input_modality: str, output_modality: str, use_roberta=False, load_pretrained=False, **kwargs):
         """
         Encoder Decoder Transfomer. Modalities can be any modality from MODALITY_PROCESSORS
         Based on: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#Transformer
@@ -160,15 +162,30 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         super().__init__()
         self.check_modalities([input_modality, output_modality])
         self.config = get_config()
-        self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
-        self.output_preprocessor = MODALITY_PROCESSORS[output_modality](self.config, **kwargs)
+        self.use_roberta = use_roberta
         # Encoder
-        self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
-                                                         self.config.hidden_size, self.config.dropout_prob,
-                                                         batch_first=True)
-        self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
-        self.encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
+        if input_modality == 'text' and use_roberta:
+            if 'pretokenized' in kwargs and kwargs['pretokenized']:
+                self.pretokenized = True
+                self.preprocessor = None
+            else:
+                self.preprocessor = RobertaTokenizer.from_pretrained('roberta-base')
+                self.pretokenized = False
+            if load_pretrained:
+                self.roberta = RobertaForMaskedLM.from_pretrained('roberta-base')
+            else:
+                self.roberta = RobertaForMaskedLM(RobertaConfig())
+            kwargs['reconst'] = False
+            self.config.d_model = self.roberta.config.hidden_size
+        else:
+            self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
+            self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
+                                                             self.config.hidden_size, self.config.dropout_prob,
+                                                             batch_first=True)
+            self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
+            self.encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
         # Decoder
+        self.output_preprocessor = MODALITY_PROCESSORS[output_modality](self.config, **kwargs)
         self.decoder_layers = nn.TransformerDecoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
                                                          batch_first=True)
@@ -176,14 +193,23 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
         self.encoder_heads = self.setup_heads(self.preprocessor, **kwargs)
+        if self.use_roberta:
+            self.encoder_heads['tok_reconst'] = self.roberta.lm_head
         self.decoder_heads = self.setup_heads(self.output_preprocessor, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
 
     def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> Dict[str, th.Tensor]:
-        src_embeddings, src_att_mask = self.preprocessor(src_input, src_att_mask)
-        output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
+        if self.use_roberta:
+            if not self.pretokenized:
+                tok_out = self.preprocessor(src_input)
+                src_input, src_att_mask = tok_out['input_ids'], tok_out['attention_mask']
+            src_input, src_att_mask = th.tensor(src_input, device=self.config.device, dtype=int), th.tensor(src_att_mask, device=self.config.device, dtype=int)
+            output = self.roberta.roberta(input_ids=src_input, attention_mask=src_att_mask)[0]
+        else:
+            src_embeddings, src_att_mask = self.preprocessor(src_input, src_att_mask)
+            output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
 
         return_embs = {'none': output}
         for key in self.encoder_heads:

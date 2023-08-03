@@ -1,7 +1,7 @@
 # General configs
-d_model: 256
-n_heads: 8
-n_layers: 8
-hidden_size: 512
-dropout_prob: 0.0
-layer_norm_eps: 1.0e-6
+d_model: 768
+n_heads: 12
+n_layers: 12
+hidden_size: 3072
+dropout_prob: 0.1
+layer_norm_eps: 1.0e-12
