@@ -21,7 +21,7 @@ class Processor(nn.Module, ABC):
         super().__init__()
         self.check_required_kwargs(**kwargs)
         self.config = config
-        self.LayerNorm = nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
+        self.LayerNorm = nn.LayerNorm(config.emb_dim, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.dropout_prob)
 
     @abstractmethod
@@ -74,8 +74,8 @@ class TextProcessor(Processor):
             self.pretokenized = False
             self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", model_max_length=256)
             vocab_size, pad_token_id = self.tokenizer.vocab_size, self.tokenizer.pad_token_id
-        self.word_embeddings = nn.Embedding(vocab_size, config.d_model, padding_idx=pad_token_id)
-        self.position_embeddings = nn.Embedding(kwargs['max_text_length'], config.d_model)
+        self.word_embeddings = nn.Embedding(vocab_size, config.emb_dim, padding_idx=pad_token_id)
+        self.position_embeddings = nn.Embedding(kwargs['max_text_length'], config.emb_dim)
         position_ids = th.arange(start=0, end=kwargs['max_text_length'], step=1)
         # register buffer (these are constant tokens and NOT token embeddings)
         self.register_buffer('position_ids', position_ids)
@@ -102,9 +102,9 @@ class TextProcessor(Processor):
         position_embeddings = self.position_embeddings(self.position_ids[:seq_len])
         position_embeddings = position_embeddings.expand(batch_size, seq_len, -1)
 
-        # Scale input embeddings by sqrt of d_model. Unclear why, but seems to be standard practice
+        # Scale input embeddings by sqrt of emb_dim. Unclear why, but seems to be standard practice
         # https://datascience.stackexchange.com/questions/87906/transformer-model-why-are-word-embeddings-scaled-before-adding-positional-encod/87909#87909
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
+        embeddings = (input_embeds * math.sqrt(self.config.emb_dim)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
@@ -137,10 +137,10 @@ class ImageProcessor(Processor):
 
         self.num_channels = kwargs['num_channels']
         self.img_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        self.patch_embeddings = nn.Conv2d(kwargs['num_channels'], config.d_model,
+        self.patch_embeddings = nn.Conv2d(kwargs['num_channels'], config.emb_dim,
                                           kernel_size=self.patch_size, stride=self.patch_size)
-        self.position_embeddings = nn.Embedding(self.num_patches + 1, config.d_model)  # +1 for cls token
-        self.cls_embedding = nn.Parameter(th.randn(config.d_model))
+        self.position_embeddings = nn.Embedding(self.num_patches + 1, config.emb_dim)  # +1 for cls token
+        self.cls_embedding = nn.Parameter(th.randn(config.emb_dim))
         position_ids = th.arange(start=0, end=self.num_patches + 1, step=1)
         # register buffer (these are constant tokens and NOT token embeddings)
         self.register_buffer('position_ids', position_ids)
@@ -164,14 +164,14 @@ class ImageProcessor(Processor):
         else:
             pixel_values = self.img_processor(images, return_tensors='pt')['pixel_values'].to(self.config.device)
         batch_size, num_channels, height, width = pixel_values.shape
-        # patch_embeddings returns: batch_size, d_model, image_size // patch_size, image_size // patch_size
-        # flatten returns: batch_size, d_model, num_patches
-        # transpose returns: batch_size, num_patches, d_model
+        # patch_embeddings returns: batch_size, emb_dim, image_size // patch_size, image_size // patch_size
+        # flatten returns: batch_size, emb_dim, num_patches
+        # transpose returns: batch_size, num_patches, emb_dim
         input_embeds = self.patch_embeddings(pixel_values).flatten(2).transpose(1, 2)
         # Add cls token to the start of set of tokens
         input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
         position_embeddings = self.position_embeddings(self.position_ids)
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
+        embeddings = (input_embeds * math.sqrt(self.config.emb_dim)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         # image is always the same size, so no need for padding --> attention mask is all zeros
@@ -188,8 +188,8 @@ class ActionProcessor(Processor):
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config, **kwargs)
         # +1 for SOS/CLS token
-        self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
-        self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.d_model)
+        self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.emb_dim)
+        self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.emb_dim)
         cls_id = th.tensor(kwargs['num_actions'])
         position_ids = th.arange(start=0, end=kwargs['max_seq_length'] + 1, step=1)
         # register buffer (these are constant ids, not embeddings)
@@ -215,7 +215,7 @@ class ActionProcessor(Processor):
         # Embed
         input_embeds = self.action_embeddings(actions)
         position_embeddings = self.position_embeddings(self.position_ids)
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
+        embeddings = (input_embeds * math.sqrt(self.config.emb_dim)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
@@ -232,9 +232,9 @@ class GridStateProcessor(Processor):
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config, **kwargs)
         input_size = np.prod(kwargs['state_shape'])
-        self.state_embeddings = nn.Linear(input_size, config.d_model)
-        self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.d_model)
-        self.cls_embedding = nn.Parameter(th.randn(config.d_model))
+        self.state_embeddings = nn.Linear(input_size, config.emb_dim)
+        self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] + 1, config.emb_dim)
+        self.cls_embedding = nn.Parameter(th.randn(config.emb_dim))
         position_ids = th.arange(start=0, end=kwargs['max_seq_length'] + 1, step=1)
         # register buffer (these are constant tokens and NOT token embeddings)
         self.register_buffer('position_ids', position_ids)
@@ -257,7 +257,7 @@ class GridStateProcessor(Processor):
         input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
         att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
         position_embeddings = self.position_embeddings(self.position_ids)
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
+        embeddings = (input_embeds * math.sqrt(self.config.emb_dim)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
@@ -276,18 +276,18 @@ class TrajectoryProcessor(Processor):
         self.use_cnn = 'use_cnn' in kwargs and kwargs['use_cnn']
         if self.use_cnn:
             # assert in kwargs
-            self.state_embeddings = CNNEncoder(kwargs['state_shape'], config.d_model)
+            self.state_embeddings = CNNEncoder(kwargs['state_shape'], config.emb_dim)
         else:
             input_size = np.prod(kwargs['state_shape'])
             self.state_embeddings = nn.Sequential(
                 nn.Flatten(start_dim=2),
                 *[l for i in range(n_layers) for l in
-                  (nn.Linear(*((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))),
-                   nn.ReLU())
+                  (nn.Linear(*((input_size, config.emb_dim) if i == 0 else (config.emb_dim, config.emb_dim))),
+                   nn.GELU())
                   ])
-        self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
-        self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] * 2 + 1, config.d_model)
-        self.cls_embedding = nn.Parameter(th.randn(config.d_model))
+        self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.emb_dim)
+        self.position_embeddings = nn.Embedding(kwargs['max_seq_length'] * 2 + 1, config.emb_dim)
+        self.cls_embedding = nn.Parameter(th.randn(config.emb_dim))
         position_ids = th.arange(start=0, end=kwargs['max_seq_length'] * 2 + 1, step=1)
         # register buffer (these are constant tokens and NOT token embeddings)
         self.register_buffer('position_ids', position_ids)
@@ -325,7 +325,7 @@ class TrajectoryProcessor(Processor):
         att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
         # Add position embeddings
         position_embeddings = self.position_embeddings(self.position_ids)
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
+        embeddings = (input_embeds * math.sqrt(self.config.emb_dim)) + position_embeddings
         # Layernom + dropout
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -366,11 +366,11 @@ class InitialStateProcessor(Processor):
         input_size = np.prod(kwargs['state_shape'])
         self.state_embeddings = nn.ModuleList(
             [nn.Linear(
-                *((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))
+                *((input_size, config.emb_dim) if i == 0 else (config.emb_dim, config.emb_dim))
              ) for i in range(n_layers)])
         self.text_processor = TextProcessor(config, **kwargs)
-        self.state_type_emb = nn.Parameter(th.randn(config.d_model))
-        self.text_type_emb = nn.Parameter(th.randn(config.d_model))
+        self.state_type_emb = nn.Parameter(th.randn(config.emb_dim))
+        self.text_type_emb = nn.Parameter(th.randn(config.emb_dim))
         self.to(self.config.device)
 
     @staticmethod
@@ -386,7 +386,7 @@ class InitialStateProcessor(Processor):
         state, mission = init_state
         batch_size, grid_size, grid_size, _ = state.shape
         states = th.from_numpy(state).to(self.config.device)
-        # Process text - text_embs should be shape (batch_size, text_length, d_model)
+        # Process text - text_embs should be shape (batch_size, text_length, emb_dim)
         text_embs, text_att_mask = self.text_processor(mission, None)
         # Process state
         state_embs = self.state_embeddings(th.flatten(states, start_dim=1).float())

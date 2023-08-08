@@ -29,12 +29,12 @@ class CNNEncoder(nn.Module):
         self.cnn = nn.Sequential(
             nn.Conv2d(3, 8, 5, stride=2, padding=0),
             nn.BatchNorm2d(8),
-            nn.ReLU(True),
+            nn.GELU(True),
             nn.Conv2d(8, 16, 3, stride=2, padding=1),
             nn.BatchNorm2d(16),
-            nn.ReLU(True),
+            nn.GELU(True),
             nn.Conv2d(16, 32, 3, stride=2, padding=0),
-            nn.ReLU(True),
+            nn.GELU(True),
         )
         self.intermediate_shape = get_output_shape(self.cnn, [1, *input_shape])
         self.flatten = nn.Flatten()
@@ -61,10 +61,10 @@ class CNNDecoder(nn.Module):
         self.deconv = nn.Sequential(
             nn.ConvTranspose2d(32, 16, 3, stride=2, padding=0, output_padding=1),
             nn.BatchNorm2d(16),
-            nn.ReLU(True),
+            nn.GELU(True),
             nn.ConvTranspose2d(16, 8, 3, stride=2, padding=1, output_padding=1),
             nn.BatchNorm2d(8),
-            nn.ReLU(True),
+            nn.GELU(True),
             nn.ConvTranspose2d(8, 3, 5, stride=2, padding=1, output_padding=2)
         )
         self.final_shape = cnn_in_shape

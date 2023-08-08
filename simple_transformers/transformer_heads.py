@@ -9,9 +9,9 @@ class TransformHead(nn.Module):
         super(TransformHead, self).__init__()
         input_size = input_size if input_size else config.d_model
         self.head = nn.Sequential(
-            nn.Linear(input_size, config.d_model),
-            nn.ReLU(),
-            nn.LayerNorm(config.d_model, eps=1e-12)
+            nn.Linear(input_size, config.emb_dim),
+            nn.GELU(),
+            nn.LayerNorm(config.emb_dim, eps=1e-12)
         )
 
     def forward(self, hidden_states):
@@ -23,7 +23,7 @@ class LinearReconstructionHead(nn.Module):
         super(LinearReconstructionHead, self).__init__()
         assert out_size is not None
         self.transform_head = TransformHead(config)
-        self.decoder = nn.Sequential(nn.Linear(config.d_model, out_size),
+        self.decoder = nn.Sequential(nn.Linear(config.emb_dim, out_size),
                                      act_fn())
         self.out_scale = out_scale
 
@@ -36,7 +36,7 @@ class DeconvReconstructionHead(nn.Module):
     def __init__(self, config, cnn_in_shape, enc_output_shape, enc_flattened_shape, out_scale=1):
         super(DeconvReconstructionHead, self).__init__()
         self.transform_head = TransformHead(config)
-        self.decoder = CNNDecoder(config.d_model, cnn_in_shape=cnn_in_shape,
+        self.decoder = CNNDecoder(config.emb_dim, cnn_in_shape=cnn_in_shape,
                                   cnn_output_shape=enc_output_shape, cnn_flattened_shape=enc_flattened_shape)
         self.out_scale = out_scale
 
@@ -68,7 +68,7 @@ class ClassificationHead(nn.Module):
         input_size = input_size if input_size else config.d_model
         self.head = nn.Sequential(
             TransformHead(config, input_size=input_size),
-            nn.Linear(config.d_model, num_classes)
+            nn.Linear(config.emb_dim, num_classes)
         )
 
     def forward(self, hidden_states):
