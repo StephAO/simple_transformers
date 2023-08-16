@@ -69,7 +69,6 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         self.check_modalities([modality])
         self.config = get_config()
         self.preprocessor = MODALITY_PROCESSORS[modality](self.config, **kwargs)
-        # self.emb_dim_to_d_model = nn.Linear(self.config.emb_dim, self.config.d_model)
         self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
                                                          activation='gelu', batch_first=True)
@@ -91,7 +90,6 @@ class ModalityEncoder(nn.Module, TransformerMixin):
                  3) If num classes has been defined, return logits. Shape = (batch size, num_classes)
         """
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask)
-        # embeddings = self.emb_dim_to_d_model(embeddings)
         output = self.transformer_encoder(embeddings, src_key_padding_mask=attention_mask.bool())
         return_embs = {'none': output}
         for key in self.encoder_heads:
@@ -113,7 +111,6 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self.check_modalities([modality])
         self.config = get_config()
         self.preprocessor = MODALITY_PROCESSORS[modality](self.config, **kwargs)
-        # self.emb_dim_to_d_model = nn.Linear(self.config.emb_dim, self.config.d_model)
         # Decoder
         self.decoder_layers = nn.TransformerDecoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
@@ -136,8 +133,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
 
         tgt_embeddings, tgt_attention_mask = self.preprocessor(tgt_input, tgt_att_mask)
-        # tgt_embeddings = self.emb_dim_to_d_model(tgt_embeddings)
-        batch_size, tgt_seq_len, emb_dim = tgt_embeddings.shape
+        batch_size, tgt_seq_len, d_model = tgt_embeddings.shape
         causal_mask = self.generate_square_subsequent_mask(tgt_seq_len)
         decoder_output = self.decoder(tgt_embeddings, encoder_output, tgt_mask=causal_mask,
                                       tgt_key_padding_mask=tgt_attention_mask.bool())
@@ -183,7 +179,6 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             self.config.d_model = self.roberta.config.hidden_size
         else:
             self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
-            # self.enc_emb_dim_to_d_model = nn.Linear(self.config.emb_dim, self.config.d_model)
             self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
                                                              self.config.hidden_size, self.config.dropout_prob,
                                                              activation='gelu', batch_first=True)
@@ -191,7 +186,6 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             self.encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
         # Decoder
         self.output_preprocessor = MODALITY_PROCESSORS[output_modality](self.config, **kwargs)
-        # self.dec_emb_dim_to_d_model = nn.Linear(self.config.emb_dim, self.config.d_model)
         self.decoder_layers = nn.TransformerDecoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
                                                          activation='gelu', batch_first=True)
@@ -215,7 +209,6 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             output = self.roberta.roberta(input_ids=src_input, attention_mask=src_att_mask)[0]
         else:
             src_embeddings, src_att_mask = self.preprocessor(src_input, src_att_mask)
-            # src_embeddings = self.enc_emb_dim_to_d_model(src_embeddings)
             output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
 
         return_embs = {'none': output}
@@ -230,8 +223,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             -> Dict[str, th.Tensor]:
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
         tgt_embeddings, tgt_attention_mask = self.output_preprocessor(tgt_input, tgt_att_mask)
-        # tgt_embeddings = self.dec_emb_dim_to_d_model(tgt_embeddings)
-        batch_size, tgt_seq_len, emb_dim = tgt_embeddings.shape
+        batch_size, tgt_seq_len, d_model = tgt_embeddings.shape
         causal_mask = self.generate_square_subsequent_mask(tgt_seq_len)
         # Output should be shape (batch size, seq len, d_model).
         decoder_output = self.decoder(tgt_embeddings, encoder_output, tgt_mask=causal_mask,
