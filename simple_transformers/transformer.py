@@ -1,5 +1,6 @@
 from abc import ABC
 import numpy as np
+from pathlib import Path
 import torch as th
 import torch.nn as nn
 from transformers import RobertaConfig, RobertaTokenizer, RobertaForMaskedLM
@@ -13,23 +14,31 @@ from typing import Any, Dict, List, Tuple, Union
 
 
 class TransformerMixin(object):
-    def setup_heads(self, preprocessor, **kwargs):
+    def setup_heads(self, preprocessor, loss_types, for_encoder=True, **kwargs):
         heads = {}
-        heads['trans'] = TransformHead(self.config)
-        if 'reconst' in kwargs and kwargs['reconst']:
-            for reconst_type in preprocessor.get_reconstruction_types():
+        if ('reconstructive' in loss_types and for_encoder) or ('generative' in loss_types and not for_encoder):
+            reconstruction_types = ['tok_reconst'] if (self.use_hf and for_encoder) else preprocessor.get_reconstruction_types()
+            for reconst_type in reconstruction_types:
                 if reconst_type == 'lin_reconst':
                     assert 'state_shape' in kwargs
                     out_size = np.prod(kwargs['state_shape'])
                     heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=out_size, **kwargs)
                 elif reconst_type == 'tok_reconst':
-                    emb_weights = preprocessor.get_embedding_weights()
-                    heads['tok_reconst'] = TokenReconstructionHead(self.config, emb_weights)
+                    if self.use_hf and for_encoder and hasattr(self.encoder, 'lm_head'):
+                        heads['tok_reconst'] = None
+                    else:
+                        emb_weights = preprocessor.get_embedding_weights()
+                        heads['tok_reconst'] = TokenReconstructionHead(self.config, emb_weights)
                 elif reconst_type == 'deconv_reconst':
                     cnn_in_shape, cnn_out_shape, cnn_flat_shape = preprocessor.get_encoder_intermediate_shapes()
                     heads['deconv_reconst'] = DeconvReconstructionHead(self.config, cnn_in_shape, cnn_out_shape, cnn_flat_shape)
-        if 'num_classes' in kwargs:
+        if 'predictive' in loss_types and for_encoder:
             heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
+        if 'contrastive' in loss_types and for_encoder:
+            # Value taken from: https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPConfig
+            self.logit_scale_init_value = 2.6592
+            self.logit_scale = nn.Parameter(th.ones([]) * self.logit_scale_init_value)
+            heads['cont'] = TransformHead(self.config)
         return nn.ModuleDict(heads)
 
     def check_modalities(self, modalities):
@@ -55,9 +64,16 @@ class TransformerMixin(object):
         """
         return th.triu(th.full((sz, sz), float('-inf'), device=self.config.device), diagonal=1)
 
+    def save(self, name, tag):
+        Path(self.base_dir / 'models').mkdir(parents=True, exist_ok=True)
+        th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
+
+    def load(self, name, tag):
+        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}'), map_location=self.config.device)
+
 
 class ModalityEncoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str, **kwargs):
+    def __init__(self, modality: str,  loss_types: List, base_dir: str, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -68,6 +84,8 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         super().__init__()
         self.check_modalities([modality])
         self.config = get_config()
+        self.base_dir = base_dir
+        self.use_hf = False
         self.preprocessor = MODALITY_PROCESSORS[modality](self.config, **kwargs)
         self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
                                                          self.config.hidden_size, self.config.dropout_prob,
@@ -75,7 +93,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
 
-        self.encoder_heads = self.setup_heads(self.preprocessor, **kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -100,7 +118,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
 
 
 class ModalityDecoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str, **kwargs):
+    def __init__(self, modality: str, loss_types: List, base_dir: str, **kwargs):
         """
         Decoder Transformer. Modalities can be any modality from MODALITY_PROCESSORS
         Based on: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#Transformer
@@ -110,6 +128,8 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         super().__init__()
         self.check_modalities([modality])
         self.config = get_config()
+        self.base_dir = base_dir
+        self.use_hf = False
         self.preprocessor = MODALITY_PROCESSORS[modality](self.config, **kwargs)
         # Decoder
         self.decoder_layers = nn.TransformerDecoderLayer(self.config.d_model, self.config.n_heads,
@@ -118,7 +138,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        self.decoder_heads = self.setup_heads(self.preprocessor, **kwargs)
+        self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=False, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -149,7 +169,8 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
 
 class ModalityEncoderDecoder(nn.Module, TransformerMixin):
-    def __init__(self, input_modality: str, output_modality: str, use_roberta=False, load_pretrained=False, **kwargs):
+    def __init__(self, input_modality: str, output_modality: str, loss_types: List, base_dir: str,
+                 pretrained_model: Union[Tuple[Any, Any]]=(None, None), **kwargs):
         """
         Encoder Decoder Transfomer. Modalities can be any modality from MODALITY_PROCESSORS
         Based on: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#Transformer
@@ -162,21 +183,24 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         super().__init__()
         self.check_modalities([input_modality, output_modality])
         self.config = get_config()
-        self.use_roberta = use_roberta
+        self.base_dir = base_dir
+
+        pretrained_model_name, pretrained_model_tag = pretrained_model
+        self.use_hf = pretrained_model_tag and ('hf' in pretrained_model_tag)
+
         # Encoder
-        if input_modality == 'text' and use_roberta:
+        if input_modality == 'text' and self.use_hf:
             if 'pretokenized' in kwargs and kwargs['pretokenized']:
-                self.pretokenized = True
                 self.preprocessor = None
+                self.pretokenized = True
             else:
-                self.preprocessor = RobertaTokenizer.from_pretrained('roberta-base')
+                self.preprocessor = RobertaTokenizer.from_pretrained(pretrained_model_name)
                 self.pretokenized = False
-            if load_pretrained:
-                self.roberta = RobertaForMaskedLM.from_pretrained('roberta-base')
+            if 'pretrained' in pretrained_model_tag:
+                self.encoder = RobertaForMaskedLM.from_pretrained(pretrained_model_name)
             else:
-                self.roberta = RobertaForMaskedLM(RobertaConfig())
-            kwargs['reconst'] = False
-            self.config.d_model = self.roberta.config.hidden_size
+                self.encoder = RobertaForMaskedLM(RobertaConfig().from_pretrained(pretrained_model_name))
+            self.config.d_model = self.encoder.config.hidden_size
         else:
             self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
             self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
@@ -192,21 +216,22 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        self.encoder_heads = self.setup_heads(self.preprocessor, **kwargs)
-        if self.use_roberta:
-            self.encoder_heads['tok_reconst'] = self.roberta.lm_head
-        self.decoder_heads = self.setup_heads(self.output_preprocessor, **kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
+        self.decoder_heads = self.setup_heads(self.output_preprocessor, loss_types, for_encoder=False, **kwargs)
+
+        if not self.use_hf and pretrained_model_name is not None:
+            self.load(pretrained_model_name, pretrained_model_tag)
 
         self._init_parameters()
         self.to(self.config.device)
 
     def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> Dict[str, th.Tensor]:
-        if self.use_roberta:
+        if self.use_hf:
             if not self.pretokenized:
                 tok_out = self.preprocessor(src_input)
                 src_input, src_att_mask = tok_out['input_ids'], tok_out['attention_mask']
             src_input, src_att_mask = th.tensor(src_input, device=self.config.device, dtype=int), th.tensor(src_att_mask, device=self.config.device, dtype=int)
-            output = self.roberta.roberta(input_ids=src_input, attention_mask=src_att_mask)[0]
+            output = self.encoder.roberta(input_ids=src_input, attention_mask=src_att_mask)[0]
         else:
             src_embeddings, src_att_mask = self.preprocessor(src_input, src_att_mask)
             output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
@@ -215,7 +240,10 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         for key in self.encoder_heads:
             if key == 'cls':
                 return_embs[key] = self.encoder_heads[key](output[:, 0, :])
-            return_embs[key] = self.encoder_heads[key](output)
+            elif key == 'tok_reconst' and self.use_hf:
+                return_embs[key] = self.encoder.lm_head(output[0])
+            else:
+                return_embs[key] = self.encoder_heads[key](output)
 
         return return_embs
 
@@ -231,8 +259,6 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
 
         return_embs = {'none': decoder_output}
         for key in self.decoder_heads:
-            if key == 'cls':
-                return_embs[key] = self.decoder_heads[key](decoder_output[:, 0, :])
             return_embs[key] = self.decoder_heads[key](decoder_output)
 
         return return_embs

@@ -11,12 +11,11 @@ class TransformHead(nn.Module):
         self.head = nn.Sequential(
             nn.Linear(input_size, config.d_model),
             nn.GELU(),
-            nn.LayerNorm(config.d_model, eps=1e-12)
+            nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
         )
 
     def forward(self, hidden_states):
         return self.head(hidden_states)
-
 
 class LinearReconstructionHead(nn.Module):
     def __init__(self, config, out_size=None, act_fn=nn.Tanh, out_scale=1, **kwargs):

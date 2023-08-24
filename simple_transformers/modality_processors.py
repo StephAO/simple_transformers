@@ -82,6 +82,7 @@ class Processor(nn.Module, ABC):
             emb_indices.sort()
         else:
             emb_indices = np.arange(seq_len)
+        emb_indices = th.tensor(emb_indices, device=self.config.device, dtype=int)
         if self.config.emb_type == 'sincos':
             return self.position_embeddings[emb_indices]
         elif self.config.emb_type == 'learned':
