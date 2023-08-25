@@ -38,7 +38,7 @@ class TransformerMixin(object):
             # Value taken from: https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPConfig
             self.logit_scale_init_value = 2.6592
             self.logit_scale = nn.Parameter(th.ones([]) * self.logit_scale_init_value)
-            heads['cont'] = TransformHead(self.config)
+            # heads['cont'] = TransformHead(self.config)
         return nn.ModuleDict(heads)
 
     def check_modalities(self, modalities):
@@ -69,7 +69,7 @@ class TransformerMixin(object):
         th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
 
     def load(self, name, tag):
-        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}'), map_location=self.config.device)
+        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):
