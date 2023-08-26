@@ -66,10 +66,12 @@ class TransformerMixin(object):
 
     def save(self, name, tag):
         Path(self.base_dir / 'models').mkdir(parents=True, exist_ok=True)
+        print(f'Saving model to: {self.base_dir} / models / {name}_{tag}')
         th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
 
     def load(self, name, tag):
-        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
+        print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
+        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=True)
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):
@@ -170,7 +172,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
 class ModalityEncoderDecoder(nn.Module, TransformerMixin):
     def __init__(self, input_modality: str, output_modality: str, loss_types: List, base_dir: str,
-                 pretrained_model: Union[Tuple[Any, Any]]=(None, None), **kwargs):
+                 use_hf_model: Union[Tuple[Any, Any]]=(None, None), **kwargs):
         """
         Encoder Decoder Transfomer. Modalities can be any modality from MODALITY_PROCESSORS
         Based on: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#Transformer
@@ -184,9 +186,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.check_modalities([input_modality, output_modality])
         self.config = get_config()
         self.base_dir = base_dir
-
-        pretrained_model_name, pretrained_model_tag = pretrained_model
-        self.use_hf = pretrained_model_tag and ('hf' in pretrained_model_tag)
+        self.use_hf = use_hf_model
 
         # Encoder
         if input_modality == 'text' and self.use_hf:
@@ -194,12 +194,12 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
                 self.preprocessor = None
                 self.pretokenized = True
             else:
-                self.preprocessor = RobertaTokenizer.from_pretrained(pretrained_model_name)
+                self.preprocessor = RobertaTokenizer.from_pretrained('roberta-base')
                 self.pretokenized = False
-            if 'pretrained' in pretrained_model_tag:
-                self.encoder = RobertaForMaskedLM.from_pretrained(pretrained_model_name)
-            else:
-                self.encoder = RobertaForMaskedLM(RobertaConfig().from_pretrained(pretrained_model_name))
+            # if 'pretrained' in pretrained_model_tag:
+            self.encoder = RobertaForMaskedLM.from_pretrained('roberta-base')
+            # else:
+            # self.encoder = RobertaForMaskedLM(RobertaConfig().from_pretrained(pretrained_model_name))
             self.config.d_model = self.encoder.config.hidden_size
         else:
             self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
@@ -218,9 +218,6 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
 
         self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
         self.decoder_heads = self.setup_heads(self.output_preprocessor, loss_types, for_encoder=False, **kwargs)
-
-        if not self.use_hf and pretrained_model_name is not None:
-            self.load(pretrained_model_name, pretrained_model_tag)
 
         self._init_parameters()
         self.to(self.config.device)
