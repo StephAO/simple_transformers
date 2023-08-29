@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Tuple, Union
 class TransformerMixin(object):
     def setup_heads(self, preprocessor, loss_types, for_encoder=True, **kwargs):
         heads = {}
+        heads['trans'] = TransformHead(self.config)
         if ('reconstructive' in loss_types and for_encoder) or ('generative' in loss_types and not for_encoder):
             reconstruction_types = ['tok_reconst'] if (self.use_hf and for_encoder) else preprocessor.get_reconstruction_types()
             for reconst_type in reconstruction_types:
@@ -38,7 +39,6 @@ class TransformerMixin(object):
             # Value taken from: https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPConfig
             self.logit_scale_init_value = 2.6592
             self.logit_scale = nn.Parameter(th.ones([]) * self.logit_scale_init_value)
-            # heads['cont'] = TransformHead(self.config)
         return nn.ModuleDict(heads)
 
     def check_modalities(self, modalities):
@@ -97,7 +97,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
 
         self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
 
-        self._init_parameters()
+        # self._init_parameters()
         self.to(self.config.device)
 
     def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Dict[str, Any]:
@@ -142,7 +142,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
         self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=False, **kwargs)
 
-        self._init_parameters()
+        # self._init_parameters()
         self.to(self.config.device)
 
     def forward(self, encoder_output: Any, tgt_input: Any,
@@ -201,6 +201,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             # else:
             # self.encoder = RobertaForMaskedLM(RobertaConfig().from_pretrained(pretrained_model_name))
             self.config.d_model = self.encoder.config.hidden_size
+            self.config.n_layers = self.encoder.config.num_hidden_layers
         else:
             self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
             self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
@@ -219,7 +220,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
         self.decoder_heads = self.setup_heads(self.output_preprocessor, loss_types, for_encoder=False, **kwargs)
 
-        self._init_parameters()
+        # self._init_parameters()
         self.to(self.config.device)
 
     def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> Dict[str, th.Tensor]:
