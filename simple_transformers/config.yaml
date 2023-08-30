@@ -1,5 +1,6 @@
 # General configs
 d_model: 512
+d_proj: 512
 n_heads: 8
 n_layers: 6
 hidden_size: 2048

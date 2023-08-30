@@ -3,6 +3,16 @@ import torch.nn as nn
 
 from simple_transformers.utils import CNNDecoder
 
+class ProjectionHead(nn.Module):
+    def __init__(self, config, input_size=None, **kwargs):
+        super(ProjectionHead, self).__init__()
+        input_size = input_size if input_size else config.d_model
+        self.head = nn.Sequential(
+            nn.Linear(input_size, config.d_proj, bias=False),
+        )
+
+    def forward(self, hidden_states):
+        return self.head(hidden_states)
 
 class TransformHead(nn.Module):
     def __init__(self, config, input_size=None, **kwargs):

@@ -7,7 +7,7 @@ from transformers import RobertaConfig, RobertaTokenizer, RobertaForMaskedLM
 
 from simple_transformers.modality_processors import MODALITY_PROCESSORS
 from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, \
-    LinearReconstructionHead, DeconvReconstructionHead
+    LinearReconstructionHead, DeconvReconstructionHead, ProjectionHead
 from simple_transformers.utils import _init_weights, get_config
 
 from typing import Any, Dict, List, Tuple, Union
@@ -39,6 +39,7 @@ class TransformerMixin(object):
             # Value taken from: https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPConfig
             self.logit_scale_init_value = 2.6592
             self.logit_scale = nn.Parameter(th.ones([]) * self.logit_scale_init_value)
+            heads['proj'] = ProjectionHead(self.config)
         return nn.ModuleDict(heads)
 
     def check_modalities(self, modalities):
@@ -100,7 +101,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         # self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Dict[str, Any]:
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param model_input: input modality. Input type depends on the modality being encoded (e.g. for text, use str)
         :param attention_mask: Attention mask on input modality. None if attention mask is dealt using modalit processor
@@ -116,7 +117,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
             if key == 'cls':
                 return_embs[key] = self.encoder_heads[key](output[:, 0, :])
             return_embs[key] = self.encoder_heads[key](output)
-        return return_embs
+        return return_embs, attention_mask
 
 
 class ModalityDecoder(nn.Module, TransformerMixin):
@@ -146,7 +147,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self.to(self.config.device)
 
     def forward(self, encoder_output: Any, tgt_input: Any,
-                tgt_att_mask: Union[np.array, None] = None) -> Dict[str, th.Tensor]:
+                tgt_att_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param src_input: encoder input. Input type depends on the modality being encoded (e.g. for text, use str)
         :param tgt_input: decoder input. Input type depends on the modality being encoded (e.g. for text, use str)
@@ -167,7 +168,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
             return_embs[key] = self.decoder_heads[key](decoder_output)
 
         # Output should be shape (batch size, seq len, d_model).
-        return return_embs
+        return return_embs, tgt_attention_mask
 
 
 class ModalityEncoderDecoder(nn.Module, TransformerMixin):
@@ -223,7 +224,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         # self._init_parameters()
         self.to(self.config.device)
 
-    def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> Dict[str, th.Tensor]:
+    def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         if self.use_hf:
             if not self.pretokenized:
                 tok_out = self.preprocessor(src_input)
@@ -243,10 +244,10 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             else:
                 return_embs[key] = self.encoder_heads[key](output)
 
-        return return_embs
+        return return_embs, src_att_mask
 
     def decode(self, encoder_output: th.Tensor, tgt_input: Any, tgt_att_mask: Union[np.array, None] = None) \
-            -> Dict[str, th.Tensor]:
+            -> Tuple[Dict[str, Any], th.Tensor]:
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
         tgt_embeddings, tgt_attention_mask = self.output_preprocessor(tgt_input, tgt_att_mask)
         batch_size, tgt_seq_len, d_model = tgt_embeddings.shape
@@ -259,7 +260,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         for key in self.decoder_heads:
             return_embs[key] = self.decoder_heads[key](decoder_output)
 
-        return return_embs
+        return return_embs, tgt_attention_mask
 
     def forward(self, src_input: Any, tgt_input: Any, src_att_mask: Union[np.array, None] = None,
                 tgt_att_mask: Union[np.array, None] = None) -> Tuple[Dict[str, th.Tensor], Dict[str, th.Tensor]]:
