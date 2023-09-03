@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Tuple, Union
 class TransformerMixin(object):
     def setup_heads(self, preprocessor, loss_types, for_encoder=True, **kwargs):
         heads = {}
-        heads['trans'] = TransformHead(self.config)
+        #heads['trans'] = TransformHead(self.config)
         if ('reconstructive' in loss_types and for_encoder) or ('generative' in loss_types and not for_encoder):
             reconstruction_types = ['tok_reconst'] if (self.use_hf and for_encoder) else preprocessor.get_reconstruction_types()
             for reconst_type in reconstruction_types:
@@ -39,7 +39,7 @@ class TransformerMixin(object):
             # Value taken from: https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPConfig
             self.logit_scale_init_value = 2.6592
             self.logit_scale = nn.Parameter(th.ones([]) * self.logit_scale_init_value)
-            heads['proj'] = ProjectionHead(self.config)
+            #heads['proj'] = ProjectionHead(self.config)
         return nn.ModuleDict(heads)
 
     def check_modalities(self, modalities):
@@ -72,7 +72,7 @@ class TransformerMixin(object):
 
     def load(self, name, tag):
         print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
-        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=True)
+        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):

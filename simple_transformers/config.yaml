@@ -4,7 +4,7 @@ d_proj: 512
 n_heads: 8
 n_layers: 6
 hidden_size: 2048
-dropout_prob: 0.1
-layer_norm_eps: 1.0e-9
+dropout_prob: 0.0
+layer_norm_eps: 1.0e-5
 emb_type: 'learned'
 randomize_pos_embs: True
