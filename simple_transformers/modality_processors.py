@@ -328,11 +328,10 @@ class TrajectoryProcessor(Processor):
         states_att_mask = th.from_numpy(states_att_mask).to(self.config.device).int()
         actions_att_mask = th.from_numpy(actions_att_mask).to(self.config.device).int()
         # Create joined attention mask
-        mask_sizes = th.sum(states_att_mask, dim=-1, keepdim=True) + th.sum(actions_att_mask, dim=-1, keepdim=True)
+        mask_sizes = th.sum(1 - states_att_mask, dim=-1, keepdim=True) + th.sum(1 - actions_att_mask, dim=-1, keepdim=True)
         att_mask = th.zeros((batch_size, traj_length * 2), device=self.config.device, dtype=int)
         att_mask[th.arange(0, traj_length * 2, device=self.config.device).repeat(batch_size, 1) >= mask_sizes] = 1
         # Embed states and actions
-
         state_embeds = self.state_embeddings(states.float())
         action_embeds = self.action_embeddings(actions)
         # Interleaves states and actions

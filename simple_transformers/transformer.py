@@ -70,9 +70,13 @@ class TransformerMixin(object):
         print(f'Saving model to: {self.base_dir} / models / {name}_{tag}')
         th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
 
-    def load(self, name, tag):
-        print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
-        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
+    def load(self, name, tag, load_hf=False):
+        if load_hf:
+            print(f'Loading HF model: {name}')
+            self.encoder = RobertaForMaskedLM.from_pretrained(name)
+        else:
+            print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
+            self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):
@@ -98,7 +102,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
 
         self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
 
-        # self._init_parameters()
+        self._init_parameters()
         self.to(self.config.device)
 
     def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
@@ -143,7 +147,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
         self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=False, **kwargs)
 
-        # self._init_parameters()
+        self._init_parameters()
         self.to(self.config.device)
 
     def forward(self, encoder_output: Any, tgt_input: Any,
@@ -192,15 +196,11 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         # Encoder
         if input_modality == 'text' and self.use_hf:
             if 'pretokenized' in kwargs and kwargs['pretokenized']:
-                self.preprocessor = None
-                self.pretokenized = True
+                self.preprocessor, self.pretokenized = None, True
             else:
-                self.preprocessor = RobertaTokenizer.from_pretrained('roberta-base')
-                self.pretokenized = False
-            # if 'pretrained' in pretrained_model_tag:
-            self.encoder = RobertaForMaskedLM.from_pretrained('roberta-base')
-            # else:
-            # self.encoder = RobertaForMaskedLM(RobertaConfig().from_pretrained(pretrained_model_name))
+                self.preprocessor, self.pretokenized = RobertaTokenizer.from_pretrained('roberta-base'), False
+            # huggingface model should be loaded in afterward using self.load(name, _, load_hf=True)
+            self.encoder = None
             self.config.d_model = self.encoder.config.hidden_size
             self.config.n_layers = self.encoder.config.num_hidden_layers
         else:
@@ -221,7 +221,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
         self.decoder_heads = self.setup_heads(self.output_preprocessor, loss_types, for_encoder=False, **kwargs)
 
-        # self._init_parameters()
+        self._init_parameters()
         self.to(self.config.device)
 
     def encode(self, src_input: Any, src_att_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
@@ -230,7 +230,8 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
                 tok_out = self.preprocessor(src_input)
                 src_input, src_att_mask = tok_out['input_ids'], tok_out['attention_mask']
             src_input, src_att_mask = th.tensor(src_input, device=self.config.device, dtype=int), th.tensor(src_att_mask, device=self.config.device, dtype=int)
-            output = self.encoder.roberta(input_ids=src_input, attention_mask=src_att_mask)[0]
+            # hf uses the opposite definition of an attention_mask, hence the 1 -
+            output = self.encoder.roberta(input_ids=src_input, attention_mask=1 - src_att_mask)[0]
         else:
             src_embeddings, src_att_mask = self.preprocessor(src_input, src_att_mask)
             output = self.encoder(src_embeddings, src_key_padding_mask=src_att_mask.bool())
@@ -246,15 +247,16 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
 
         return return_embs, src_att_mask
 
-    def decode(self, encoder_output: th.Tensor, tgt_input: Any, tgt_att_mask: Union[np.array, None] = None) \
-            -> Tuple[Dict[str, Any], th.Tensor]:
+    def decode(self, encoder_output: th.Tensor, tgt_input: Any, mem_att_mask:  Union[np.array, None] = None,
+               tgt_att_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
         tgt_embeddings, tgt_attention_mask = self.output_preprocessor(tgt_input, tgt_att_mask)
         batch_size, tgt_seq_len, d_model = tgt_embeddings.shape
         causal_mask = self.generate_square_subsequent_mask(tgt_seq_len)
         # Output should be shape (batch size, seq len, d_model).
         decoder_output = self.decoder(tgt_embeddings, encoder_output, tgt_mask=causal_mask,
-                                      tgt_key_padding_mask=tgt_attention_mask.bool())
+                                      tgt_key_padding_mask=tgt_attention_mask.bool(),
+                                      memory_key_padding_mask=mem_att_mask.bool())
 
         return_embs = {'none': decoder_output}
         for key in self.decoder_heads:
