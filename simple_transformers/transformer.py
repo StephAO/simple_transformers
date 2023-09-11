@@ -3,7 +3,7 @@ import numpy as np
 from pathlib import Path
 import torch as th
 import torch.nn as nn
-from transformers import RobertaConfig, RobertaTokenizer, RobertaForMaskedLM
+from transformers import RobertaConfig, RobertaTokenizer, RobertaForMaskedLM, AutoConfig
 
 from simple_transformers.modality_processors import MODALITY_PROCESSORS
 from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, \
@@ -25,7 +25,7 @@ class TransformerMixin(object):
                     out_size = np.prod(kwargs['state_shape'])
                     heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=out_size, **kwargs)
                 elif reconst_type == 'tok_reconst':
-                    if self.use_hf and for_encoder and hasattr(self.encoder, 'lm_head'):
+                    if self.use_hf and for_encoder:
                         heads['tok_reconst'] = None
                     else:
                         emb_weights = preprocessor.get_embedding_weights()
@@ -73,7 +73,7 @@ class TransformerMixin(object):
     def load(self, name, tag, load_hf=False):
         if load_hf:
             print(f'Loading HF model: {name}')
-            self.encoder = RobertaForMaskedLM.from_pretrained(name)
+            self.encoder = RobertaForMaskedLM.from_pretrained(name).to(self.config.device)
         else:
             print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
             self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
@@ -201,8 +201,9 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
                 self.preprocessor, self.pretokenized = RobertaTokenizer.from_pretrained('roberta-base'), False
             # huggingface model should be loaded in afterward using self.load(name, _, load_hf=True)
             self.encoder = None
-            self.config.d_model = self.encoder.config.hidden_size
-            self.config.n_layers = self.encoder.config.num_hidden_layers
+            self.hf_config = AutoConfig.from_pretrained('roberta-base')
+            self.config.d_model = self.hf_config.hidden_size
+            self.config.n_layers = self.hf_config.num_hidden_layers
         else:
             self.preprocessor = MODALITY_PROCESSORS[input_modality](self.config, **kwargs)
             self.encoder_layers = nn.TransformerEncoderLayer(self.config.d_model, self.config.n_heads,
@@ -241,7 +242,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
             if key == 'cls':
                 return_embs[key] = self.encoder_heads[key](output[:, 0, :])
             elif key == 'tok_reconst' and self.use_hf:
-                return_embs[key] = self.encoder.lm_head(output[0])
+                return_embs[key] = self.encoder.lm_head(output)
             else:
                 return_embs[key] = self.encoder_heads[key](output)
 
