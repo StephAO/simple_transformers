@@ -214,15 +214,23 @@ class ActionProcessor(Processor):
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config, **kwargs)
         # +1 for SOS/CLS token
-        self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
+        if 'num_actions' in kwargs:
+            self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
+            cls_id = th.tensor(kwargs['num_actions'])
+            self.register_buffer('cls_id', cls_id)
+            self.action_enc_mode = 'emb'
+        elif 'action_dim' in kwargs:
+            self.action_embeddings = nn.Linear(kwargs['action_dim'], config.d_model)
+            self.cls_embedding = nn.Parameter(th.randn(config.d_model))
+            self.action_enc_mode = 'lin'
+        else:
+            raise ValueError('ActionProcessor requires either num_actions or action_dim')
         self.setup_position_embeddings(kwargs['max_seq_length'] + 1)
-        cls_id = th.tensor(kwargs['num_actions'])
-        self.register_buffer('cls_id', cls_id)
         self.to(self.config.device)
 
     @staticmethod
     def required_attributes() -> dict:
-        return {'num_actions': int, 'max_seq_length': int}
+        return {'max_seq_length': int}
     
     def get_reconstruction_types(self) -> List[str]:
         return ['tok_reconst']
@@ -233,10 +241,13 @@ class ActionProcessor(Processor):
         actions = th.from_numpy(actions).to(self.config.device).int()
         att_mask = th.from_numpy(att_mask).to(self.config.device).int()
         # Add cls token to the start of each traj
-        actions = th.cat([self.cls_id.expand(batch_size, 1).to(self.config.device), actions], dim=1)
+        if self.action_enc_mode == 'emb':
+            actions = th.cat([self.cls_id.expand(batch_size, 1).to(self.config.device), actions], dim=1)
         att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
         # Embed
         input_embeds = self.action_embeddings(actions)
+        if self.action_enc_mode == 'lin':
+            input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
         position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
@@ -305,7 +316,13 @@ class TrajectoryProcessor(Processor):
                   (nn.Linear(*((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))),
                    nn.GELU())
                   ])
-        self.action_embeddings = nn.Embedding(kwargs['num_actions'], config.d_model)
+
+        if 'num_actions' in kwargs:
+            self.action_enc_mode = 'emb'
+            self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
+        elif 'action_dim' in kwargs:
+            self.action_enc_mode = 'lin'
+            self.action_embeddings = nn.Linear(kwargs['action_dim'], config.d_model)
         self.setup_position_embeddings(kwargs['max_seq_length'] * 2 + 1)
         self.cls_embedding = nn.Parameter(th.randn(config.d_model))
         self.to(self.config.device)
@@ -333,6 +350,7 @@ class TrajectoryProcessor(Processor):
         att_mask[th.arange(0, traj_length * 2, device=self.config.device).repeat(batch_size, 1) >= mask_sizes] = 1
         # Embed states and actions
         state_embeds = self.state_embeddings(states.float())
+        actions = actions.int() if self.action_enc_mode == 'emb' else actions.float()
         action_embeds = self.action_embeddings(actions)
         # Interleaves states and actions
         input_embeds = th.stack((state_embeds, action_embeds), dim=2).reshape(batch_size, 2 * traj_length, -1)
