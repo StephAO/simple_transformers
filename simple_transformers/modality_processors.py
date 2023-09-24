@@ -437,11 +437,62 @@ class InitialStateProcessor(Processor):
         return embeddings, att_mask
 
 
+class PigletProcessor(Processor):
+    """
+    Processes piglet state into input embeddings.
+    These come pretokenized and are all the same size, so no padding is required.
+    Attention mask is created by tokenizer.
+    REQUIRES: 'state_size' kwarg.
+              If pretokenizing text, then 'pretokenized', 'vocab_size' and 'pad_token_id' kwargs are also required
+    Can be used for generation as well
+    """
+
+    def __init__(self, config: SimpleNamespace, **kwargs):
+        super().__init__(config, **kwargs)
+        self.state_vocab_size = kwargs['state_vocab_size']
+        self.input_embeddings = nn.Embedding(self.state_vocab_size, config.d_model)
+        self.setup_position_embeddings(kwargs['max_text_length'])
+        self.to(self.config.device)
+
+    @staticmethod
+    def required_attributes() -> dict:
+        return {'max_text_length': int}
+
+    def get_reconstruction_types(self) -> List[str]:
+        return ['tok_reconst']
+
+    def forward(self, text: Union[List[str], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
+        tokens = th.from_numpy(text).to(self.config.device).int()
+        att_mask = th.from_numpy(att_mask).to(self.config.device).int()
+        input_embeds = self.input_embeddings(tokens)
+        batch_size, seq_len, _ = input_embeds.shape
+        position_embeddings = self.get_position_embeddings(seq_len).expand(batch_size, seq_len, -1)
+
+        # Scale input embeddings by sqrt of d_model. Unclear why, but seems to be standard practice
+        # https://datascience.stackexchange.com/questions/87906/transformer-model-why-are-word-embeddings-scaled-before-adding-positional-encod/87909#87909
+        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings, att_mask
+
+    def get_embedding_weights(self) -> th.Tensor:
+        return self.input_embeddings.weight
+
+    def decode(self, token_ids: th.Tensor) -> Union[th.Tensor, str]:
+        """
+        If pretokenized, return token_ids, otherwise decode using tokenizer
+        """
+        if self.pretokenized:
+            raise ValueError('Tokens were pretokenized using a tokenizer defined elsewhere')
+        return self.tokenizer.batch_decode(token_ids)
+
+
 MODALITY_PROCESSORS = {
     'text': TextProcessor,
     'images': ImageProcessor,
     'actions': ActionProcessor,
     'states': GridStateProcessor,
     'trajs': TrajectoryProcessor,
-    'init_state': InitialStateProcessor
+    'init_state': InitialStateProcessor,
+    'piglet_states': PigletProcessor,
 }
