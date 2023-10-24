@@ -70,7 +70,7 @@ class TransformerMixin(object):
         print(f'Saving model to: {self.base_dir} / models / {name}_{tag}')
         th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
 
-    def load(self, name, tag, load_hf=False):
+    def load(self, name, tag):
         print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
         self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
@@ -272,3 +272,53 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         encoder_output = self.encode(src_input, src_att_mask)
         decoder_output = self.decode(encoder_output['none'], tgt_input, tgt_att_mask)
         return encoder_output, decoder_output
+
+
+class HFEncoder(nn.Module, TransformerMixin):
+    def __init__(self, modality: str,  loss_types: List, base_dir: str, **kwargs):
+        """
+        Encode most modalities using a transformer
+        :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
+                         See MODALITY_PROCESSORS in simple_transformers.modality_processors for all options
+        :param num_classes: If int, creates a classification transformer head
+        :param kwargs: kwargs that define the data. Requirements vary by dataset and modality
+        """
+        super().__init__()
+        self.check_modalities([modality])
+        self.preprocessor = None
+        self.config = get_config()
+        self.hf_config = AutoConfig.from_pretrained(kwargs['model_name'])
+        self.config.d_model = self.hf_config.hidden_size
+        self.config.n_layers = self.hf_config.num_hidden_layers
+        self.base_dir = base_dir
+        self.use_hf = True
+        self.encoder = None
+        self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
+        self._init_parameters()
+        self.to(self.config.device)
+
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
+        """
+        :param model_input: input modality. Input type depends on the modality being encoded (e.g. for text, use str)
+        :param attention_mask: Attention mask on input modality. None if attention mask is dealt using modalit processor
+        :return: Depending on if num classes has been defined and return_full_output, return either:
+                 1) Full output of the transformer (all token embds). Shape = (batch size, seq len, d_model)
+                 2) Single embedding for the full input (using the CLS token emb). Shape = (batch size, d_model)
+                 3) If num classes has been defined, return logits. Shape = (batch size, num_classes)
+        """
+        model_input, attention_mask = th.tensor(model_input, device=self.config.device, dtype=int), \
+                                      th.tensor(attention_mask, device=self.config.device, dtype=int)
+        output = self.encoder(model_input, src_key_padding_mask=1 - attention_mask.bool())[0]
+        return_embs = {'none': output}
+        for key in self.encoder_heads:
+            if key == 'cls':
+                return_embs[key] = self.encoder_heads[key](output[:, 0, :])
+            elif key == 'tok_reconst' and self.use_hf:
+                return_embs[key] = self.encoder.lm_head(output)
+            else:
+                return_embs[key] = self.encoder_heads[key](output)
+        return return_embs, attention_mask
+
+    def load(self, name, tag):
+        print(f'Loading HuggingFace Model {name}')
+        self.encoder = RobertaForMaskedLM.from_pretrained(name).to(self.config.device)
