@@ -71,12 +71,8 @@ class TransformerMixin(object):
         th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
 
     def load(self, name, tag, load_hf=False):
-        if load_hf:
-            print(f'Loading HF model: {name}')
-            self.encoder = RobertaForMaskedLM.from_pretrained(name).to(self.config.device)
-        else:
-            print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
-            self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
+        print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
+        self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):
@@ -150,7 +146,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, encoder_output: Any, tgt_input: Any,
+    def forward(self, encoder_output: Any, tgt_input: Any, mem_att_mask: Union[np.array, None] = None,
                 tgt_att_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param src_input: encoder input. Input type depends on the modality being encoded (e.g. for text, use str)
@@ -163,6 +159,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         batch_size, tgt_seq_len, d_model = tgt_embeddings.shape
         causal_mask = self.generate_square_subsequent_mask(tgt_seq_len)
         decoder_output = self.decoder(tgt_embeddings, encoder_output, tgt_mask=causal_mask,
+                                      memory_key_padding_mask=mem_att_mask.bool(),
                                       tgt_key_padding_mask=tgt_attention_mask.bool())
 
         return_embs = {'none': decoder_output}
