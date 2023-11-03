@@ -308,7 +308,7 @@ class HFEncoder(nn.Module, TransformerMixin):
         """
         model_input, attention_mask = th.tensor(model_input, device=self.config.device, dtype=int), \
                                       th.tensor(attention_mask, device=self.config.device, dtype=int)
-        output = self.encoder(model_input, src_key_padding_mask=1 - attention_mask.bool())[0]
+        output = self.encoder.roberta(model_input, attention_mask=1 - attention_mask)[0]
         return_embs = {'none': output}
         for key in self.encoder_heads:
             if key == 'cls':
