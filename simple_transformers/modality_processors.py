@@ -11,6 +11,11 @@ from typing import Union, List, Tuple, Any
 
 from simple_transformers.utils import CNNEncoder, CNNDecoder
 
+
+# NOTE: All attention masks here follow the hugging face convention of 1s for tokens, 0s for pads
+# This differs from pytorch's convention (but I use HF tokenizers, so I made this call).
+# When feeding into pytorch transformer models, use 1 - att_mask
+
 class Processor(nn.Module, ABC):
     def __init__(self, config: SimpleNamespace, **kwargs):
         """
@@ -123,7 +128,7 @@ class TextProcessor(Processor):
         if not self.pretokenized:
             tok_out = self.tokenizer(text, padding=True, return_tensors='pt')
             tokens = tok_out['input_ids'].to(self.config.device)
-            att_mask = 1 - tok_out['attention_mask']
+            att_mask = tok_out['attention_mask']
         else:
             tokens = th.from_numpy(text).to(self.config.device).int()
             att_mask = th.from_numpy(att_mask).to(self.config.device).int()
@@ -201,7 +206,7 @@ class ImageProcessor(Processor):
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         # image is always the same size, so no need for padding --> attention mask is all zeros
-        return embeddings, th.zeros(batch_size, self.num_patches + 1, device=self.config.device)
+        return embeddings, th.ones(batch_size, self.num_patches + 1, device=self.config.device)
 
 
 class ActionProcessor(Processor):
@@ -243,7 +248,7 @@ class ActionProcessor(Processor):
         # Add cls token to the start of each traj
         if self.action_enc_mode == 'emb':
             actions = th.cat([self.cls_id.expand(batch_size, 1).to(self.config.device), actions], dim=1)
-        att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
+        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask], dim=1)
         # Embed
         input_embeds = self.action_embeddings(actions)
         if self.action_enc_mode == 'lin':
@@ -286,7 +291,7 @@ class GridStateProcessor(Processor):
         input_embeds = self.state_embeddings(th.flatten(states, start_dim=2).float())
         # Add cls token to the start of each traj
         input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
-        att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
+        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask], dim=1)
         position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
@@ -346,8 +351,8 @@ class TrajectoryProcessor(Processor):
         actions_att_mask = th.from_numpy(actions_att_mask).to(self.config.device).int()
         # Create joined attention mask
         mask_sizes = th.sum(1 - states_att_mask, dim=-1, keepdim=True) + th.sum(1 - actions_att_mask, dim=-1, keepdim=True)
-        att_mask = th.zeros((batch_size, traj_length * 2), device=self.config.device, dtype=int)
-        att_mask[th.arange(0, traj_length * 2, device=self.config.device).repeat(batch_size, 1) >= mask_sizes] = 1
+        att_mask = th.ones((batch_size, traj_length * 2), device=self.config.device, dtype=int)
+        att_mask[th.arange(0, traj_length * 2, device=self.config.device).repeat(batch_size, 1) >= mask_sizes] = 0
         # Embed states and actions
         state_embeds = self.state_embeddings(states.float())
         actions = actions.int() if self.action_enc_mode == 'emb' else actions.float()
@@ -356,7 +361,7 @@ class TrajectoryProcessor(Processor):
         input_embeds = th.stack((state_embeds, action_embeds), dim=2).reshape(batch_size, 2 * traj_length, -1)
         # Add cls token to the start of each traj
         input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
-        att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), att_mask], dim=1)
+        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask], dim=1)
         # Add position embeddings
         position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
@@ -370,20 +375,6 @@ class TrajectoryProcessor(Processor):
 
     def get_encoder_intermediate_shapes(self) -> Tuple[Any, Any, Any]:
         return self.state_embeddings.initial_shape, self.state_embeddings.intermediate_shape, self.state_embeddings.flattened_shape
-
-    # def output_embeddings_to_logits(self, embs):
-    #     # embs is a sequence of states/actions, each having to be decoded in different ways
-    #     # 1. Split states and actions (skip first token whic is cls token)
-    #     states_embs, action_embs = embs[:, 1::2], embs[:, 2::2]
-    #     # 2. Decode each accordingly
-    #     state_logits = self.state_decode_embeddings(states_embs)
-    #     action_logits = action_embs @ th.transpose(self.action_embeddings.weight, 0, 1)
-    #     return (state_logits, action_logits)
-    #
-    # def logits_to_output(self, logits):
-    #     state_logits, action_logits = logits
-    #     _, action_ids = th.max(action_logits, dim=-1)
-    #     return (state_logits, action_ids)
 
 
 class InitialStateProcessor(Processor):
@@ -430,7 +421,7 @@ class InitialStateProcessor(Processor):
         state_embs += self.state_type_emb
         # Combine text and state embeddings and include state in attention mask
         input_embeds = th.cat([state_embs.unsqueeze(1), text_embs], dim=1)
-        att_mask = th.cat([th.zeros(batch_size, 1, device=self.config.device), text_att_mask], dim=1)
+        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), text_att_mask], dim=1)
         # Layernom + dropout
         embeddings = self.LayerNorm(input_embeds)
         embeddings = self.dropout(embeddings)
