@@ -152,11 +152,6 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         output = self.transformer_encoder(embeddings, src_key_padding_mask=(1 - attention_mask).bool())
         return_embs = {'none': output}
 
-        if cont_emb_type == 'seq':
-            return_embs['cont'] = output[:, 0]
-        elif cont_emb_type == 'tok':
-            return_embs['cont'] = output
-
         for key in self.encoder_heads:
             if key == 'cls':
                 return_embs[key] = self.encoder_heads[key](output[:, 0, :])
@@ -204,12 +199,6 @@ class ModalityDecoder(nn.Module, TransformerMixin):
                                       src_key_padding_mask=(1 - attention_mask).bool())
 
         return_embs = {'none': output}
-
-        if cont_emb_type == 'seq':
-            batch_size = model_input.shape[0]
-            return_embs['cont'] = output[range(batch_size), attention_mask.sum(dim=1) - 1]
-        elif cont_emb_type == 'tok':
-            return_embs['cont'] = output
 
         for key in self.decoder_heads:
             if key == 'cls':
@@ -360,11 +349,6 @@ class HFEncoder(nn.Module, TransformerMixin):
         output = self.encoder.roberta(model_input, attention_mask=attention_mask)[0]
         return_embs = {'none': output}
 
-        if cont_emb_type == 'seq':
-            return_embs['cont'] = output[:, 0]
-        elif cont_emb_type == 'tok':
-            return_embs['cont'] = output
-
         for key in self.encoder_heads:
             if key == 'cls':
                 return_embs[key] = self.encoder_heads[key](output[:, 0, :])
@@ -421,13 +405,7 @@ class HFDecoder(nn.Module, TransformerMixin):
         # Output should be shape (batch size, seq len, d_model).
         output = self.decoder.transformer(model_input, attention_mask=attention_mask, position_ids=position_ids,
                                           use_cache=False)[0]
-
         return_embs = {'none': output}
-        if cont_emb_type == 'seq':
-            batch_size = model_input.shape[0]
-            return_embs['cont'] = output[range(batch_size), attention_mask.sum(dim=1) - 1]
-        elif cont_emb_type == 'tok':
-            return_embs['cont'] = output
 
         for key in self.decoder_heads:
             if key == 'cls':
