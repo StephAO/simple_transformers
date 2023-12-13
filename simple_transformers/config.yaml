@@ -2,7 +2,7 @@
 d_model: 768
 d_proj: 512
 n_heads: 8
-n_layers: 6
+n_layers: 8
 hidden_size: 2048
 dropout_prob: 0.0
 layer_norm_eps: 1.0e-5

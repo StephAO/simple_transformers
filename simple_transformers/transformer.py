@@ -65,8 +65,12 @@ class TransformerMixin(object):
         """
         return th.triu(th.full((sz, sz), float('-inf'), device=self.config.device), diagonal=1)
 
-    def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, temperature=1):
+    def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, temperature=1, **kwargs):
         with th.no_grad():
+            if isinstance(start_seqs, np.ndarray):
+                start_seqs = th.tensor(start_seqs, device=self.config.device)
+            if isinstance(att_mask, np.ndarray):
+                att_mask = th.tensor(att_mask, device=self.config.device)
             # curr_seqs, att_mask = th.tensor(start_seqs, device=self.config.device, dtype=int), th.tensor(att_mask, device=self.config.device, dtype=int)
             curr_seqs = start_seqs
             batch_size, seq_len = start_seqs.shape
@@ -90,7 +94,7 @@ class TransformerMixin(object):
                 dones = th.logical_or(dones, new_tokens == tokenizer.eos_token_id)
 
                 curr_seqs = th.cat((curr_seqs, new_tokens.reshape(batch_size, 1)), dim=1)
-                att_mask = th.cat( (att_mask, th.ones( (batch_size, 1)) ), dim=1)
+                att_mask = th.cat( (att_mask, th.ones( (batch_size, 1), device=self.config.device) ), dim=1)
                 curr_idx += 1
                 if curr_idx >= max_new_tokens:
                     break
