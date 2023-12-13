@@ -185,18 +185,18 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, cont_emb_type: str=None) -> Tuple[Dict[str, Any], th.Tensor]:
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, position_ids=None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param src_input: encoder input. Input type depends on the modality being encoded (e.g. for text, use str)
         :param src_input: decoder input. Input type depends on the modality being encoded (e.g. for text, use str)
         Returns
         """
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
-        embeddings, attention_mask = self.preprocessor(model_input, attention_mask)
+        embeddings, attention_mask = self.preprocessor(model_input, attention_mask, position_ids=position_ids)
         batch_size, seq_len, d_model = embeddings.shape
         causal_mask = self.generate_square_subsequent_mask(seq_len)
         output = self.decoder(embeddings,  mask=causal_mask, is_causal=True,
-                                      src_key_padding_mask=(1 - attention_mask).bool())
+                              src_key_padding_mask=(1 - attention_mask).bool())
 
         return_embs = {'none': output}
 

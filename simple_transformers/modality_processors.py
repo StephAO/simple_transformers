@@ -80,13 +80,15 @@ class Processor(nn.Module, ABC):
             raise NotImplementedError(f'Embedding type {self.config.emb_type} has not been implemented')
         # register buffer (these are constant tokens and NOT token embeddings)
 
-    def get_position_embeddings(self, seq_len):
+    def get_position_embeddings(self, seq_len, position_ids=None):
         if self.config.randomize_pos_embs:
             # Based on: https://aclanthology.org/2023.acl-short.161.pdf
             emb_indices = np.random.choice(np.arange(self.max_pos_emb), size=seq_len, replace=False)
             emb_indices.sort()
-        else:
+        elif position_ids is None:
             emb_indices = np.arange(seq_len)
+        else:
+            emb_indices = position_ids
         emb_indices = th.tensor(emb_indices, device=self.config.device, dtype=int)
         if self.config.emb_type == 'sincos':
             return self.position_embeddings[emb_indices]
@@ -124,17 +126,20 @@ class TextProcessor(Processor):
         return ['tok_reconst']
 
 
-    def forward(self, text: Union[List[str], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
+    def forward(self, text: Union[List[str], np.array], att_mask: None, position_ids=None) -> Tuple[th.Tensor, th.Tensor]:
         if not self.pretokenized:
             tok_out = self.tokenizer(text, padding=True, return_tensors='pt')
             tokens = tok_out['input_ids'].to(self.config.device)
             att_mask = tok_out['attention_mask']
         else:
-            tokens = th.from_numpy(text).to(self.config.device).int()
-            att_mask = th.from_numpy(att_mask).to(self.config.device).int()
+            if isinstance(text, np.ndarray):
+                text = th.from_numpy(text)
+                att_mask = th.from_numpy(att_mask)
+            tokens = text.to(self.config.device).int()
+            att_mask = att_mask.to(self.config.device).int()
         input_embeds = self.word_embeddings(tokens)
         batch_size, seq_len, _ = input_embeds.shape
-        position_embeddings = self.get_position_embeddings(seq_len).expand(batch_size, seq_len, -1)
+        position_embeddings = self.get_position_embeddings(seq_len, position_ids=position_ids).expand(batch_size, seq_len, -1)
 
         # Scale input embeddings by sqrt of d_model. Unclear why, but seems to be standard practice
         # https://datascience.stackexchange.com/questions/87906/transformer-model-why-are-word-embeddings-scaled-before-adding-positional-encod/87909#87909
