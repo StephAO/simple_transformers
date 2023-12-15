@@ -63,7 +63,8 @@ class TransformerMixin(object):
         r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
             Unmasked positions are filled with float(0.0).
         """
-        return th.triu(th.full((sz, sz), float('-inf'), device=self.config.device), diagonal=1)
+        # th.triu(th.full((sz, sz), float('-inf'), device=self.config.device), diagonal=1)
+        return th.triu(th.full((sz, sz), 1., device=self.config.device), diagonal=1).bool()
 
     def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, temperature=1, **kwargs):
         with th.no_grad():
@@ -83,6 +84,7 @@ class TransformerMixin(object):
             while not th.all(dones):
                 position_ids = att_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(att_mask == 0, 1)
+                
                 logits = self.forward(curr_seqs, att_mask, position_ids=position_ids)[0]['tok_reconst']
                 logits = logits[:, -1, :]# / temperature
                 # logits = top_k_logits(logits, k=top_k)
@@ -194,8 +196,11 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         # TODO currently always uses teacher forcing. There should be an option for iteratively decoding to be used in testing
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask, position_ids=position_ids)
         batch_size, seq_len, d_model = embeddings.shape
-        causal_mask = self.generate_square_subsequent_mask(seq_len)
-        output = self.decoder(embeddings,  mask=causal_mask, is_causal=True,
+
+        using_left_pad = th.any(attention_mask[:, 0] == 0)
+        causal_mask = None if using_left_pad else self.generate_square_subsequent_mask(seq_len)
+
+        output = self.decoder(embeddings,  mask=causal_mask, is_causal=not using_left_pad,
                               src_key_padding_mask=(1 - attention_mask).bool())
 
         return_embs = {'none': output}

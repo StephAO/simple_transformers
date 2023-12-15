@@ -114,6 +114,7 @@ class TextProcessor(Processor):
             self.pretokenized = False
             self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", model_max_length=256)
             vocab_size, pad_token_id = self.tokenizer.vocab_size, self.tokenizer.pad_token_id
+            raise NotImplementedError
         self.word_embeddings = nn.Embedding(vocab_size, config.d_model, padding_idx=pad_token_id)
         self.setup_position_embeddings(kwargs['max_text_length'])
         self.to(self.config.device)
