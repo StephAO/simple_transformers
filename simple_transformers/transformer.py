@@ -11,6 +11,7 @@ from simple_transformers.transformer_heads import TransformHead, ClassificationH
 from simple_transformers.utils import _init_weights, get_config
 
 from typing import Any, Dict, List, Tuple, Union
+from types import SimpleNamespace
 
 
 class TransformerMixin(object):
@@ -115,7 +116,7 @@ class TransformerMixin(object):
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str,  loss_types: List, base_dir: str, **kwargs):
+    def __init__(self, modality: str,  loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -125,7 +126,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         """
         super().__init__()
         self.check_modalities([modality])
-        self.config = get_config()
+        self.config = config or get_config()
         self.base_dir = base_dir
         self.modality = modality
         self.use_hf = False
@@ -162,7 +163,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
 
 
 class ModalityDecoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str, loss_types: List, base_dir: str, **kwargs):
+    def __init__(self, modality: str, loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Decoder Transformer. Modalities can be any modality from MODALITY_PROCESSORS
         Based on: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#Transformer
@@ -171,7 +172,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         """
         super().__init__()
         self.check_modalities([modality])
-        self.config = get_config()
+        self.config = config or get_config()
         self.base_dir = base_dir
         self.use_hf = False
         self.preprocessor = MODALITY_PROCESSORS[modality](self.config, **kwargs)
@@ -215,7 +216,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
 
 class ModalityEncoderDecoder(nn.Module, TransformerMixin):
-    def __init__(self, input_modality: str, output_modality: str, loss_types: List, base_dir: str,
+    def __init__(self, input_modality: str, output_modality: str, loss_types: List, base_dir: str, config: SimpleNamespace=None,
                  use_hf_model: Union[Tuple[Any, Any]]=(None, None), **kwargs):
         """
         Encoder Decoder Transfomer. Modalities can be any modality from MODALITY_PROCESSORS
@@ -228,7 +229,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         """
         super().__init__()
         self.check_modalities([input_modality, output_modality])
-        self.config = get_config()
+        self.config = config or get_config()
         self.base_dir = base_dir
         self.use_hf = use_hf_model
 
@@ -317,7 +318,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
 
 
 class HFEncoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str,  loss_types: List, base_dir: str, **kwargs):
+    def __init__(self, modality: str,  loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -328,7 +329,7 @@ class HFEncoder(nn.Module, TransformerMixin):
         super().__init__()
         self.check_modalities([modality])
         self.preprocessor = None
-        self.config = get_config()
+        self.config = config or get_config()
         self.model_name = kwargs['model_name']
         self.hf_config = AutoConfig.from_pretrained(kwargs['model_name'])
         self.config.d_model = self.hf_config.hidden_size
@@ -369,7 +370,7 @@ class HFEncoder(nn.Module, TransformerMixin):
 
 
 class HFDecoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str,  loss_types: List, base_dir: str, **kwargs):
+    def __init__(self, modality: str,  loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -380,7 +381,7 @@ class HFDecoder(nn.Module, TransformerMixin):
         super().__init__()
         self.check_modalities([modality])
         self.preprocessor = None
-        self.config = get_config()
+        self.config = config or get_config()
         self.model_name = kwargs['model_name']
         self.hf_config = AutoConfig.from_pretrained(kwargs['model_name'])
         self.tokenizer = AutoTokenizer.from_pretrained(kwargs['model_name'], padding_side='left')
