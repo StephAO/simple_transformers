@@ -92,8 +92,6 @@ class TransformerMixin(object):
                 # log_probs = nn.functional.softmax(logits, dim=-1)
 
                 new_tokens = th.argmax(logits, dim=1)
-                # print(new_tokens.shape)
-                # print(new_tokens)
                 dones = th.logical_or(dones, new_tokens == tokenizer.eos_token_id)
 
                 curr_seqs = th.cat((curr_seqs, new_tokens.reshape(batch_size, 1)), dim=1)
@@ -198,10 +196,10 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask, position_ids=position_ids)
         batch_size, seq_len, d_model = embeddings.shape
 
-        using_left_pad = th.any(attention_mask[:, 0] == 0)
-        causal_mask = None if using_left_pad else self.generate_square_subsequent_mask(seq_len)
+        # using_left_pad = th.any(attention_mask[:, 0] == 0)
+        causal_mask = self.generate_square_subsequent_mask(seq_len)#None if using_left_pad else self.generate_square_subsequent_mask(seq_len)
 
-        output = self.decoder(embeddings,  mask=causal_mask, is_causal=not using_left_pad,
+        output = self.decoder(embeddings,  mask=causal_mask, is_causal=True,#not using_left_pad,
                               src_key_padding_mask=(1 - attention_mask).bool())
 
         return_embs = {'none': output}
