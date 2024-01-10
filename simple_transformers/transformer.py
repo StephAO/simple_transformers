@@ -64,7 +64,6 @@ class TransformerMixin(object):
         r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
             Unmasked positions are filled with float(0.0).
         """
-        # th.triu(th.full((sz, sz), float('-inf'), device=self.config.device), diagonal=1)
         return th.triu(th.full((sz, sz), 1., device=self.config.device), diagonal=1).bool()
 
     def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, temperature=1, **kwargs):
@@ -183,6 +182,19 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self._init_parameters()
         self.to(self.config.device)
 
+    def generate_causal_mask_for_left_padding(self, batch_size, seq_len, attention_mask):# pad_lengths, prefix_lengths):
+        # -> batch_size x seq_len x seq_len.
+        causal_mask = self.generate_square_subsequent_mask(seq_len).repeat(batch_size, 1, 1)
+
+        pad_len = th.sum(attention_mask, dim=1)
+        # Unmasks the first pad_len tokens in each sequence since if they can't attend to themselves they become
+        # NaN and mess everything else up
+        for b in range(batch_size):
+            causal_mask[b, :pad_len[b], :pad_len[b]] = False
+
+        # Repeats per attention head.
+        return th.repeat_interleave(causal_mask, self.config.n_heads, dim=0).to(self.config.device)
+
     def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, position_ids=None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param src_input: encoder input. Input type depends on the modality being encoded (e.g. for text, use str)
@@ -202,11 +214,18 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask, position_ids=position_ids)
         batch_size, seq_len, d_model = embeddings.shape
 
-        # using_left_pad = th.any(attention_mask[:, 0] == 0)
-        causal_mask = None if using_left_pad else self.generate_square_subsequent_mask(seq_len)
+        causal_mask = (self.generate_causal_mask_for_left_padding(batch_size, seq_len, attention_mask)
+                      if using_left_pad else
+                      self.generate_square_subsequent_mask(seq_len))
 
-        output = self.decoder(embeddings,  mask=causal_mask, is_causal=False,#not using_left_pad,
+        print('?', using_left_pad)
+        print(attention_mask)
+
+        output = self.decoder(embeddings,  mask=causal_mask, is_causal=True,#not using_left_pad,
                               src_key_padding_mask=(1 - attention_mask).bool())
+
+        th.set_printoptions(edgeitems=5, linewidth=200)
+        print(embeddings[:, -8:, :10])
 
         return_embs = {'none': output}
 
