@@ -105,6 +105,7 @@ class TransformerMixin(object):
         th.save(self.state_dict(), self.base_dir / 'models' / f'{name}_{tag}')
 
     def load(self, name, tag):
+        tag = tag.strip('hf_')
         print(f'Loading model from: {self.base_dir} / models / {name}_{tag}')
         self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
@@ -444,6 +445,7 @@ class HFDecoder(nn.Module, TransformerMixin):
     def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, use_hf_decoding=True):
         start_seqs, att_mask = th.tensor(start_seqs, device=self.config.device, dtype=int), \
                                th.tensor(att_mask, device=self.config.device, dtype=int)
+
         if use_hf_decoding:
             output = self.decoder.generate(start_seqs, attention_mask=att_mask, max_new_tokens=max_new_tokens)
         else:
@@ -452,7 +454,12 @@ class HFDecoder(nn.Module, TransformerMixin):
 
     def load(self, name, tag):
         print(f'Loading HuggingFace Model {self.model_name}')
-        self.decoder = GPT2LMHeadModel.from_pretrained(self.model_name).to(self.config.device)
+        if tag == 'base_hf':
+            self.decoder = GPT2LMHeadModel.from_pretrained(self.model_name).to(self.config.device)
+        else:
+            tag = tag.strip('hf_')
+            self.decoder = GPT2LMHeadModel.from_pretrained(self.model_name).to(self.config.device)
+            self.load_state_dict(th.load(self.base_dir / 'models' / f'{name}_{tag}', map_location=self.config.device), strict=False)
 
 
 
