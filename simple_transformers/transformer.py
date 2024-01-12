@@ -184,13 +184,15 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
     def generate_causal_mask_for_left_padding(self, batch_size, seq_len, attention_mask):# pad_lengths, prefix_lengths):
         # -> batch_size x seq_len x seq_len.
-        causal_mask = self.generate_square_subsequent_mask(seq_len).repeat(batch_size, 1, 1)
+        base_causal_mask = self.generate_square_subsequent_mask(seq_len).repeat(batch_size, 1, 1)
+        causal_mask = th.full_like(base_causal_mask, False)
 
-        pad_len = th.sum(attention_mask, dim=1)
+        pad_len = th.sum(attention_mask == 0, dim=1)
         # Unmasks the first pad_len tokens in each sequence since if they can't attend to themselves they become
         # NaN and mess everything else up
+
         for b in range(batch_size):
-            causal_mask[b, :pad_len[b], :pad_len[b]] = False
+            causal_mask[b, pad_len[b]:, pad_len[b]:] = base_causal_mask[b, :seq_len-pad_len[b], :seq_len-pad_len[b]]
 
         # Repeats per attention head.
         return th.repeat_interleave(causal_mask, self.config.n_heads, dim=0).to(self.config.device)
@@ -218,14 +220,8 @@ class ModalityDecoder(nn.Module, TransformerMixin):
                       if using_left_pad else
                       self.generate_square_subsequent_mask(seq_len))
 
-        print('?', using_left_pad)
-        print(attention_mask)
-
-        output = self.decoder(embeddings,  mask=causal_mask, is_causal=True,#not using_left_pad,
+        output = self.decoder(embeddings,  mask=causal_mask, is_causal=False,#not using_left_pad,
                               src_key_padding_mask=(1 - attention_mask).bool())
-
-        th.set_printoptions(edgeitems=5, linewidth=200)
-        print(embeddings[:, -8:, :10])
 
         return_embs = {'none': output}
 
