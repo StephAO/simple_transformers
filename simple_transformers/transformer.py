@@ -16,32 +16,7 @@ from types import SimpleNamespace
 
 class TransformerMixin(object):
     def setup_heads(self, preprocessor, loss_types, for_encoder=True, **kwargs):
-        heads = {}
-        #heads['trans'] = TransformHead(self.config)
-        if ('reconstructive' in loss_types and for_encoder) or ('generative' in loss_types and not for_encoder):
-            reconstruction_types = ['tok_reconst'] if (self.use_hf and for_encoder) else preprocessor.get_reconstruction_types()
-            for reconst_type in reconstruction_types:
-                if reconst_type == 'lin_reconst':
-                    assert 'state_shape' in kwargs
-                    out_size = np.prod(kwargs['state_shape'])
-                    heads['lin_reconst'] = LinearReconstructionHead(self.config, out_size=out_size, **kwargs)
-                elif reconst_type == 'tok_reconst':
-                    if self.use_hf and for_encoder:
-                        heads['tok_reconst'] = None
-                    else:
-                        emb_weights = preprocessor.get_embedding_weights()
-                        heads['tok_reconst'] = TokenReconstructionHead(self.config, emb_weights)
-                elif reconst_type == 'deconv_reconst':
-                    cnn_in_shape, cnn_out_shape, cnn_flat_shape = preprocessor.get_encoder_intermediate_shapes()
-                    heads['deconv_reconst'] = DeconvReconstructionHead(self.config, cnn_in_shape, cnn_out_shape, cnn_flat_shape)
-        if 'predictive' in loss_types and for_encoder:
-            heads['cls'] = ClassificationHead(self.config, kwargs['num_classes'])
-        if 'contrastive' in loss_types and for_encoder:
-            # Value taken from: https://huggingface.co/docs/transformers/model_doc/clip#transformers.CLIPConfig
-            self.logit_scale_init_value = 2.6592
-            self.logit_scale = nn.Parameter(th.ones([]) * self.logit_scale_init_value)
-            #heads['proj'] = ProjectionHead(self.config)
-        return nn.ModuleDict(heads)
+        pass
 
     def check_modalities(self, modalities):
         for modality in modalities:
@@ -178,7 +153,10 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerEncoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
+        # self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
+
+        emb_weights = self.preprocessor.get_embedding_weights()
+        self.lm_head = TokenReconstructionHead(self.config, emb_weights)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -224,12 +202,12 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         output = self.decoder(embeddings,  mask=causal_mask, is_causal=False,#not using_left_pad,
                               src_key_padding_mask=(1 - attention_mask).bool())
 
-        return_embs = {'none': output}
+        return_embs = {'none': output, 'tok_reconst': self.lm_head(output)}
 
-        for key in self.decoder_heads:
-            if key == 'cls':
-                return_embs[key] = self.decoder_heads[key](output[:, 0, :])
-            return_embs[key] = self.decoder_heads[key](output)
+        # for key in self.decoder_heads:
+        #     if key == 'cls':
+        #         return_embs[key] = self.decoder_heads[key](output[:, 0, :])
+        #     return_embs[key] = self.decoder_heads[key](output)
 
         # Output should be shape (batch size, seq len, d_model).
         return return_embs, attention_mask
@@ -431,15 +409,16 @@ class HFDecoder(nn.Module, TransformerMixin):
         # Output should be shape (batch size, seq len, d_model).
         output = self.decoder.transformer(model_input, attention_mask=attention_mask, position_ids=position_ids,
                                           use_cache=False)[0]
-        return_embs = {'none': output}
-
-        for key in self.decoder_heads:
-            if key == 'cls':
-                return_embs[key] = self.decoder_heads[key](output[:, -1, :])
-            elif key == 'tok_reconst' and self.use_hf:
-                return_embs[key] = self.decoder.lm_head(output)
-            else:
-                return_embs[key] = self.decoder_heads[key](output)
+        return_embs = {'none': output, 'tok_reconst': self.decoder.lm_head(output)}
+        # return_embs[key] =
+        #
+        # for key in self.decoder_heads:
+        #     if key == 'cls':
+        #         return_embs[key] = self.decoder_heads[key](output[:, -1, :])
+        #     elif key == 'tok_reconst' and self.use_hf:
+        #         return_embs[key] = self.decoder.lm_head(output)
+        #     else:
+        #         return_embs[key] = self.decoder_heads[key](output)
         return return_embs, attention_mask
 
     def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, use_hf_decoding=True):
