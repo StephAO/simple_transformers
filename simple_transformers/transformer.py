@@ -125,10 +125,10 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         output = self.transformer_encoder(embeddings, src_key_padding_mask=(1 - attention_mask).bool())
         return_embs = {'none': output}
 
-        for key in self.encoder_heads:
-            if key == 'cls':
-                return_embs[key] = self.encoder_heads[key](output[:, 0, :])
-            return_embs[key] = self.encoder_heads[key](output)
+        # for key in self.encoder_heads:
+        #     if key == 'cls':
+        #         return_embs[key] = self.encoder_heads[key](output[:, 0, :])
+        #     return_embs[key] = self.encoder_heads[key](output)
         return return_embs, attention_mask
 
 

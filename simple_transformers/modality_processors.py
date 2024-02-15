@@ -292,12 +292,12 @@ class GridStateProcessor(Processor):
     def forward(self, states: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
         batch_size, traj_length, *_ = states.shape
-        states = th.from_numpy(states).to(self.config.device)
-        att_mask = th.from_numpy(att_mask).to(self.config.device).int()
+        # states = th.from_numpy(states).to(self.config.device)
+        # att_mask = th.from_numpy(att_mask).to(self.config.device).int()
         input_embeds = self.state_embeddings(th.flatten(states, start_dim=2).float())
         # Add cls token to the start of each traj
         input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
-        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask], dim=1)
+        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask.int()], dim=1)
         position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
