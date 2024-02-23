@@ -268,267 +268,78 @@ class ActionProcessor(Processor):
     def get_embedding_weights(self) -> th.Tensor:
         return self.action_embeddings.weight
 
-class GridStateProcessor(Processor):
+class TrajectoryProcessor(Processor):
     """
     Processes a grid world representation into input embeddings.
     Attention mask must be passed in.
-    REQUIRES: 'state_shape', 'max_seq_length' kwargs.
+    REQUIRES: 'state_shape', 'max_actions', and 'traj_type' kwargs
+    Trajectory type can be one of: 'states', 'states_actions', 'fl_states', 'fl_states_actions'
+    where fl means only first and last states are used
     """
     def __init__(self, config: SimpleNamespace, **kwargs):
         super().__init__(config, **kwargs)
         input_size = np.prod(kwargs['state_shape'])
         self.state_embeddings = nn.Linear(input_size, config.d_model)
+        self.action_embeddings = nn.Embedding(kwargs['num_diff_actions'] + 1, config.d_model)
+        self.traj_type = kwargs['traj_type']
+        # +1 for CLS token
         self.setup_position_embeddings(kwargs['max_seq_length'] + 1)
         self.cls_embedding = nn.Parameter(th.randn(config.d_model))
         self.to(self.config.device)
 
     @staticmethod
     def required_attributes() -> dict:
-        return {'state_shape': List, 'max_seq_length': int}
-    
-    def get_reconstruction_types(self) -> List[str]:
-        return ['lin_reconst']
+        return {'state_shape': List, 'max_seq_length': int, 'traj_type': str, 'num_diff_actions': int}
 
-    def forward(self, states: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
+    def forward(self, traj: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
-        batch_size, traj_length, *_ = states.shape
-        # states = th.from_numpy(states).to(self.config.device)
-        # att_mask = th.from_numpy(att_mask).to(self.config.device).int()
-        input_embeds = self.state_embeddings(th.flatten(states, start_dim=2).float())
-        # Add cls token to the start of each traj
-        input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
-        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask.int()], dim=1)
-        position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-        return embeddings, att_mask
-
-class TrajectoryProcessor(Processor):
-    """
-    TODO consider stacking states & actions
-    Processes a trajectory (sequence of states and actions) into input embeddings.
-    Currently, states should be grid world representations.
-    Attention mask must be passed in.
-    REQUIRES: 'state_shape', 'max_seq_length' kwargs.
-    """
-    def __init__(self, config, **kwargs):
-        super().__init__(config, **kwargs)
-        n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
-        self.use_cnn = 'use_cnn' in kwargs and kwargs['use_cnn']
-        if self.use_cnn:
-            # assert in kwargs
-            self.state_embeddings = CNNEncoder(kwargs['state_shape'], config.d_model)
-        else:
-            input_size = np.prod(kwargs['state_shape'])
-            self.state_embeddings = nn.Sequential(
-                nn.Flatten(start_dim=2),
-                *[l for i in range(n_layers) for l in
-                  (nn.Linear(*((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))),
-                   nn.GELU())
-                  ])
-
-        if 'num_actions' in kwargs:
-            self.action_enc_mode = 'emb'
-            self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
-        elif 'action_dim' in kwargs:
-            self.action_enc_mode = 'lin'
-            self.action_embeddings = nn.Linear(kwargs['action_dim'], config.d_model)
-        self.setup_position_embeddings(kwargs['max_seq_length'] * 2 + 1)
-        self.cls_embedding = nn.Parameter(th.randn(config.d_model))
-        self.to(self.config.device)
-
-    @staticmethod
-    def required_attributes() -> dict:
-        return {'state_shape': List, 'max_seq_length': int}
-    
-    def get_reconstruction_types(self) -> List[str]:
-        return ['tok_reconst', 'deconv_reconst'] if self.use_cnn else ['tok_reconst', 'lin_reconst']
-
-    def forward(self, traj: Tuple[np.array, np.array], att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
-        # Trajectories should already be padded at this point
-        # Move inputs to tensors on the right device
         states, actions = traj
         states_att_mask, actions_att_mask = att_mask
         batch_size, traj_length, *_ = states.shape
-        states = th.from_numpy(states).to(self.config.device)
-        actions = th.from_numpy(actions).to(self.config.device).int()
-        states_att_mask = th.from_numpy(states_att_mask).to(self.config.device).int()
-        actions_att_mask = th.from_numpy(actions_att_mask).to(self.config.device).int()
-        # Create joined attention mask
-        mask_sizes = th.sum(1 - states_att_mask, dim=-1, keepdim=True) + th.sum(1 - actions_att_mask, dim=-1, keepdim=True)
-        att_mask = th.ones((batch_size, traj_length * 2), device=self.config.device, dtype=int)
-        att_mask[th.arange(0, traj_length * 2, device=self.config.device).repeat(batch_size, 1) >= mask_sizes] = 0
+
         # Embed states and actions
-        state_embeds = self.state_embeddings(states.float())
-        actions = actions.int() if self.action_enc_mode == 'emb' else actions.float()
-        action_embeds = self.action_embeddings(actions)
-        # Interleaves states and actions
-        input_embeds = th.stack((state_embeds, action_embeds), dim=2).reshape(batch_size, 2 * traj_length, -1)
+        state_embeds = self.state_embeddings(th.flatten(states, start_dim=2).float())
+        if 'actions' in self.traj_type:
+            action_embeds = self.action_embeddings(actions.int())
+        # Join states and actions and attention_masks
+        if self.traj_type == 'states' or self.traj_type == 'fl_states':
+            # Extracting first and last state is done in dataset before padding
+            input_embeds = state_embeds
+            att_mask = states_att_mask
+        elif self.traj_type == 'states_actions':
+            # Interleaves states and actions
+            # Remove final state to match length of actions
+            traj_length -= 1
+            input_embeds = th.stack((state_embeds[:, :-1], action_embeds), dim=2).reshape(batch_size, 2 * traj_length, -1)
+            att_mask = th.stack((states_att_mask[:, :-1], actions_att_mask), dim=2).reshape(batch_size, 2 * traj_length)
+            # Re-add final state
+            print(input_embeds.shape, state_embeds.shape)
+            input_embeds = th.cat([input_embeds, state_embeds[:, -1:]], dim=1)
+            att_mask = th.cat([att_mask, states_att_mask[:, -1:]], dim=1)
+        elif self.traj_type == 'fl_states_actions':
+            # Extracting first and last state is done in dataset before padding.
+            # First state will be at index 0 and last state will be at index 1
+            input_embeds = th.cat([state_embeds[:, 0].unsqueeze(1), action_embeds, state_embeds[:, 1].unsqueeze(1)], dim=1)
+            att_mask = th.cat([states_att_mask[:, 0].unsqueeze(1), actions_att_mask, states_att_mask[:, 1].unsqueeze(1)], dim=1)
+        else:
+            raise ValueError(f'Trajectory type {self.traj_type} not recognized')
+
         # Add cls token to the start of each traj
         input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
-        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask], dim=1)
+        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask.int()], dim=1)
         # Add position embeddings
         position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
-        # Layernom + dropout
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-        return embeddings, att_mask
-
-    def get_embedding_weights(self) -> th.Tensor:
-        return self.action_embeddings.weight
-
-    def get_encoder_intermediate_shapes(self) -> Tuple[Any, Any, Any]:
-        return self.state_embeddings.initial_shape, self.state_embeddings.intermediate_shape, self.state_embeddings.flattened_shape
-
-
-class InitialStateProcessor(Processor):
-    """
-    Processes an initial state and mission into input embeddings
-    Currently, this should be a tuple of a grid world representation and a string describing the mission
-    State always has length of 1, so attention mask is calculated by increasing the length of the text
-    attention mask by 1
-    REQUIRES: 'state_shape', 'max_text_length' kwargs.
-    """
-    def __init__(self, config, **kwargs):
-        super().__init__(config, **kwargs)
-        n_layers = kwargs['num_state_enc_layers'] if 'num_state_enc_layers' in kwargs else 1
-        input_size = np.prod(kwargs['state_shape'])
-        self.state_embeddings = nn.ModuleList(
-            [nn.Linear(
-                *((input_size, config.d_model) if i == 0 else (config.d_model, config.d_model))
-             ) for i in range(n_layers)])
-        self.text_processor = TextProcessor(config, **kwargs)
-        self.state_type_emb = nn.Parameter(th.randn(config.d_model))
-        self.text_type_emb = nn.Parameter(th.randn(config.d_model))
-        self.to(self.config.device)
-
-    @staticmethod
-    def required_attributes() -> dict:
-        return {'state_shape': Tuple[int], 'max_text_length': int}
-
-    def get_reconstruction_types(self) -> List[str]:
-        # TODO not yet implemented
-        return ['tok_reconst', 'lin_reconst']
-
-    def forward(self, init_state: Tuple[np.array, str], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
-        # Move things to tensors on the right device
-        state, mission = init_state
-        batch_size, grid_size, grid_size, _ = state.shape
-        states = th.from_numpy(state).to(self.config.device)
-        # Process text - text_embs should be shape (batch_size, text_length, d_model)
-        text_embs, text_att_mask = self.text_processor(mission, None)
-        # Process state
-        state_embs = self.state_embeddings(th.flatten(states, start_dim=1).float())
-        # Add type embeddings
-        batch_size, text_len, _ = text_embs.shape
-        text_embs += self.text_type_emb
-        state_embs += self.state_type_emb
-        # Combine text and state embeddings and include state in attention mask
-        input_embeds = th.cat([state_embs.unsqueeze(1), text_embs], dim=1)
-        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), text_att_mask], dim=1)
-        # Layernom + dropout
-        embeddings = self.LayerNorm(input_embeds)
-        embeddings = self.dropout(embeddings)
-        return embeddings, att_mask
-
-
-class PigletEmbProcessor(Processor):
-    """
-    Processes piglet state into input embeddings.
-    These come pretokenized and are all the same size, so no padding is required.
-    Attention mask is created by tokenizer.
-    REQUIRES: 'state_size' kwarg.
-              If pretokenizing text, then 'pretokenized', 'vocab_size' and 'pad_token_id' kwargs are also required
-    Can be used for generation as well
-    """
-
-    def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config, **kwargs)
-        self.state_vocab_size = kwargs['state_vocab_size']
-        self.input_embeddings = nn.Embedding(self.state_vocab_size, config.d_model)
-        self.setup_position_embeddings(kwargs['max_text_length'])
-        self.to(self.config.device)
-
-    @staticmethod
-    def required_attributes() -> dict:
-        return {'max_text_length': int}
-
-    def get_reconstruction_types(self) -> List[str]:
-        return ['tok_reconst']
-
-    def forward(self, text: Union[List[str], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
-        tokens = th.from_numpy(text).to(self.config.device).int()
-        att_mask = th.from_numpy(att_mask).to(self.config.device).int()
-        input_embeds = self.input_embeddings(tokens)
-        batch_size, seq_len, _ = input_embeds.shape
-        position_embeddings = self.get_position_embeddings(seq_len).expand(batch_size, seq_len, -1)
-
-        # Scale input embeddings by sqrt of d_model. Unclear why, but seems to be standard practice
-        # https://datascience.stackexchange.com/questions/87906/transformer-model-why-are-word-embeddings-scaled-before-adding-positional-encod/87909#87909
+        # Combine, normalize, dropout
         embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings, att_mask
 
-    def get_embedding_weights(self) -> th.Tensor:
-        return self.input_embeddings.weight
-
-    def decode(self, token_ids: th.Tensor) -> Union[th.Tensor, str]:
-        """
-        If pretokenized, return token_ids, otherwise decode using tokenizer
-        """
-        if self.pretokenized:
-            raise ValueError('Tokens were pretokenized using a tokenizer defined elsewhere')
-        return self.tokenizer.batch_decode(token_ids)
-
-class PigletStateProcessor(Processor):
-    """
-    Processes piglet state into input embeddings.
-    These come pretokenized and are all the same size, so no padding is required.
-    Attention mask is created by tokenizer.
-    REQUIRES: 'state_size' kwarg.
-              If pretokenizing text, then 'pretokenized', 'vocab_size' and 'pad_token_id' kwargs are also required
-    Can be used for generation as well
-    """
-
-    def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config, **kwargs)
-        self.state_shape = kwargs['state_shape']
-        self.input_embeddings = nn.Linear(self.state_shape[-1], config.d_model)
-        self.setup_position_embeddings(2)
-        self.to(self.config.device)
-
-    @staticmethod
-    def required_attributes() -> dict:
-        return {'max_text_length': int}
-
-    def get_reconstruction_types(self) -> List[str]:
-        return ['tok_reconst']
-
-    def forward(self, text: Union[List[str], np.array], att_mask: None) -> Tuple[th.Tensor, th.Tensor]:
-        tokens = th.from_numpy(text).to(self.config.device).float()
-        att_mask = th.from_numpy(att_mask).to(self.config.device).int()
-        input_embeds = self.input_embeddings(tokens)
-        batch_size, seq_len, _ = input_embeds.shape
-        position_embeddings = self.get_position_embeddings(seq_len).expand(batch_size, seq_len, -1)
-
-        # Scale input embeddings by sqrt of d_model. Unclear why, but seems to be standard practice
-        # https://datascience.stackexchange.com/questions/87906/transformer-model-why-are-word-embeddings-scaled-before-adding-positional-encod/87909#87909
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-        return embeddings, att_mask
 
 
 MODALITY_PROCESSORS = {
     'text': TextProcessor,
     'images': ImageProcessor,
     'actions': ActionProcessor,
-    'states': GridStateProcessor,
     'trajs': TrajectoryProcessor,
-    'init_state': InitialStateProcessor,
-    'piglet_embs': PigletEmbProcessor,
-    'piglet_states': PigletStateProcessor
 }

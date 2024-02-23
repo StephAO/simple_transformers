@@ -112,7 +112,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, cont_emb_type: str=None) -> Tuple[Dict[str, Any], th.Tensor]:
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param model_input: input modality. Input type depends on the modality being encoded (e.g. for text, use str)
         :param attention_mask: Attention mask on input modality. None if attention mask is dealt using modalit processor
@@ -339,7 +339,7 @@ class HFEncoder(nn.Module, TransformerMixin):
         self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, cont_emb_type: str=None) -> Tuple[Dict[str, Any], th.Tensor]:
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param model_input: input modality. Input type depends on the modality being encoded (e.g. for text, use str)
         :param attention_mask: Attention mask on input modality. None if attention mask is dealt using modalit processor
@@ -394,7 +394,7 @@ class HFDecoder(nn.Module, TransformerMixin):
         self._init_parameters()
         self.to(self.config.device)
 
-    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, position_ids=None, cont_emb_type: str=None) -> Tuple[Dict[str, Any], th.Tensor]:
+    def forward(self, model_input: Any, attention_mask: Union[np.array, None] = None, position_ids=None) -> Tuple[Dict[str, Any], th.Tensor]:
         """
         :param model_input: input modality. Input type depends on the modality being encoded (e.g. for text, use str)
         :param attention_mask: Attention mask on input modality. None if attention mask is dealt using modalit processor
@@ -404,8 +404,7 @@ class HFDecoder(nn.Module, TransformerMixin):
                  3) If num classes has been defined, return logits. Shape = (batch size, num_classes)
         """
         # ATTENTION MASK HERE SHOULD BE 1st where we want att and 0s elsewhere
-        model_input, attention_mask = th.tensor(model_input, device=self.config.device, dtype=int), \
-                                      th.tensor(attention_mask, device=self.config.device, dtype=int)
+        model_input, attention_mask = model_input.long(), attention_mask.long()
         # Output should be shape (batch size, seq len, d_model).
         output = self.decoder.transformer(model_input, attention_mask=attention_mask, position_ids=position_ids,
                                           use_cache=False)[0]
