@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 class TransformerMixin(object):
     def setup_heads(self, preprocessor, loss_types, for_encoder=True, **kwargs):
-        pass
+        self.transform_head = TransformHead(self.config)
 
     def check_modalities(self, modalities):
         for modality in modalities:
@@ -123,7 +123,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         """
         embeddings, attention_mask = self.preprocessor(model_input, attention_mask)
         output = self.transformer_encoder(embeddings, src_key_padding_mask=(1 - attention_mask).bool())
-        return_embs = {'none': output}
+        return_embs = {'none': output, 'transform': self.transform_head(output)}
 
         # for key in self.encoder_heads:
         #     if key == 'cls':
@@ -408,7 +408,7 @@ class HFDecoder(nn.Module, TransformerMixin):
         # Output should be shape (batch size, seq len, d_model).
         output = self.decoder.transformer(model_input, attention_mask=attention_mask, position_ids=position_ids,
                                           use_cache=False)[0]
-        return_embs = {'none': output, 'tok_reconst': self.decoder.lm_head(output)}
+        return_embs = {'none': output, 'tok_reconst': self.decoder.lm_head(output), 'transform': self.transform_head(output)}
         # return_embs[key] =
         #
         # for key in self.decoder_heads:
