@@ -313,7 +313,6 @@ class TrajectoryProcessor(Processor):
             input_embeds = th.stack((state_embeds[:, :-1], action_embeds), dim=2).reshape(batch_size, 2 * traj_length, -1)
             att_mask = th.stack((states_att_mask[:, :-1], actions_att_mask), dim=2).reshape(batch_size, 2 * traj_length)
             # Re-add final state
-            print(input_embeds.shape, state_embeds.shape)
             input_embeds = th.cat([input_embeds, state_embeds[:, -1:]], dim=1)
             att_mask = th.cat([att_mask, states_att_mask[:, -1:]], dim=1)
         elif self.traj_type == 'fl_states_actions':
