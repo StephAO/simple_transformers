@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 
 class TransformerMixin(object):
-    def setup_heads(self, preprocessor, loss_types, for_encoder=True, **kwargs):
+    def setup_heads(self, preprocessor, for_encoder=True, **kwargs):
         self.transform_head = TransformHead(self.config)
 
     def check_modalities(self, modalities):
@@ -86,7 +86,7 @@ class TransformerMixin(object):
 
 
 class ModalityEncoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str,  loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
+    def __init__(self, modality: str, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -107,7 +107,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
 
-        self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -133,7 +133,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
 
 
 class ModalityDecoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str, loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
+    def __init__(self, modality: str, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Decoder Transformer. Modalities can be any modality from MODALITY_PROCESSORS
         Based on: https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#Transformer
@@ -153,7 +153,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerEncoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        # self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, **kwargs)
+        # self.decoder_heads = self.setup_heads(self.preprocessor, **kwargs)
 
         emb_weights = self.preprocessor.get_embedding_weights()
         self.lm_head = TokenReconstructionHead(self.config, emb_weights)
@@ -214,7 +214,7 @@ class ModalityDecoder(nn.Module, TransformerMixin):
 
 
 class ModalityEncoderDecoder(nn.Module, TransformerMixin):
-    def __init__(self, input_modality: str, output_modality: str, loss_types: List, base_dir: str, config: SimpleNamespace=None,
+    def __init__(self, input_modality: str, output_modality: str, base_dir: str, config: SimpleNamespace=None,
                  use_hf_model: Union[Tuple[Any, Any]]=(None, None), **kwargs):
         """
         Encoder Decoder Transfomer. Modalities can be any modality from MODALITY_PROCESSORS
@@ -257,8 +257,8 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerDecoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
 
-        self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
-        self.decoder_heads = self.setup_heads(self.output_preprocessor, loss_types, for_encoder=False, **kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, for_encoder=True, **kwargs)
+        self.decoder_heads = self.setup_heads(self.output_preprocessor, for_encoder=False, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -316,7 +316,7 @@ class ModalityEncoderDecoder(nn.Module, TransformerMixin):
 
 
 class HFEncoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str,  loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
+    def __init__(self, modality: str, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -335,7 +335,7 @@ class HFEncoder(nn.Module, TransformerMixin):
         self.base_dir = base_dir
         self.use_hf = True
         self.encoder = None
-        self.encoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, for_encoder=True, **kwargs)
         self._init_parameters()
         self.to(self.config.device)
 
@@ -368,7 +368,7 @@ class HFEncoder(nn.Module, TransformerMixin):
 
 
 class HFDecoder(nn.Module, TransformerMixin):
-    def __init__(self, modality: str,  loss_types: List, base_dir: str, config: SimpleNamespace=None, **kwargs):
+    def __init__(self, modality: str, base_dir: str, config: SimpleNamespace=None, **kwargs):
         """
         Encode most modalities using a transformer
         :param modality: A string defining kind of modality to encode. e.g. "text" or "images".
@@ -390,7 +390,7 @@ class HFDecoder(nn.Module, TransformerMixin):
         self.base_dir = base_dir
         self.use_hf = True
         self.decoder = None
-        self.decoder_heads = self.setup_heads(self.preprocessor, loss_types, for_encoder=True, **kwargs)
+        self.decoder_heads = self.setup_heads(self.preprocessor, for_encoder=True, **kwargs)
         self._init_parameters()
         self.to(self.config.device)
 
