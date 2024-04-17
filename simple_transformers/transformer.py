@@ -420,15 +420,17 @@ class HFDecoder(nn.Module, TransformerMixin):
         #         return_embs[key] = self.decoder_heads[key](output)
         return return_embs, attention_mask
 
-    def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, use_hf_decoding=True):
-        start_seqs, att_mask = th.tensor(start_seqs, device=self.config.device, dtype=int), \
-                               th.tensor(att_mask, device=self.config.device, dtype=int)
-
-        if use_hf_decoding:
-            output = self.decoder.generate(start_seqs, attention_mask=att_mask, max_new_tokens=max_new_tokens)
+    def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer):
+        if not isinstance(start_seqs, th.Tensor):
+            start_seqs, att_mask = th.tensor(start_seqs, device=self.config.device, dtype=int), \
+                                   th.tensor(att_mask, device=self.config.device, dtype=int)
         else:
-            output = super().inference_decoding(start_seqs, att_mask, max_new_tokens, tokenizer)
-        return output
+            start_seqs, att_mask = start_seqs.to(self.config.device), att_mask.to(self.config.device)
+
+        output = self.decoder.generate(start_seqs, attention_mask=att_mask, max_new_tokens=max_new_tokens,
+                                       return_dict_in_generate=True, output_scores=True)#, output_logits=True)
+        output.scores = th.softmax(th.stack(output.scores, dim=1), dim=-1)
+        return output.sequences, output.scores
 
     def load(self, name, tag):
         print(f'Loading HuggingFace Model {self.model_name}')
