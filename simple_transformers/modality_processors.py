@@ -280,6 +280,7 @@ class TrajectoryProcessor(Processor):
         super().__init__(config, **kwargs)
         input_size = np.prod(kwargs['state_shape'])
         self.state_embeddings = nn.Linear(input_size, config.d_model)
+        # + 1 for MASK token
         self.action_embeddings = nn.Embedding(kwargs['num_diff_actions'] + 1, config.d_model)
         self.traj_type = kwargs['traj_type']
         # +1 for CLS token
