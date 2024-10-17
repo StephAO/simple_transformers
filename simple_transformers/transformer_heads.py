@@ -1,5 +1,6 @@
 import torch as th
 import torch.nn as nn
+from debugpy.launcher import channel
 
 from simple_transformers.utils import CNNDecoder
 
@@ -70,6 +71,20 @@ class TokenReconstructionHead(nn.Module):
         hidden_states = self.decoder(hidden_states) + self.bias
         return hidden_states
 
+
+class StateReconstructionHead(nn.Module):
+    def __init__(self, config, input_size=None, **kwargs):
+        super(StateReconstructionHead, self).__init__()
+        input_size = input_size if input_size else config.d_model
+        self.transform_head = TransformHead(config, input_size=input_size)
+        self.channel_dims = kwargs["observation_space"]
+        self.decoder = nn.Linear(input_size, th.sum(kwargs["observation_space"]))
+
+    def forward(self, hidden_states):
+        hidden_states = self.transform_head(hidden_states)
+        logits = self.decoder(hidden_states)
+        logits = th.split(logits, self.channel_dims, dim=-1)
+        return logits
 
 class ClassificationHead(nn.Module):
     def __init__(self, config, num_classes, input_size=None, **kwargs):

@@ -214,60 +214,6 @@ class ImageProcessor(Processor):
         # image is always the same size, so no need for padding --> attention mask is all zeros
         return embeddings, th.ones(batch_size, self.num_patches + 1, device=self.config.device)
 
-
-class ActionProcessor(Processor):
-    """
-    Processes discrete actions into input embeddings.
-    Attention mask must be passed in.
-    REQUIRES: 'num_actions', 'max_seq_length' kwargs.
-    Can be used for generation as well
-    """
-    def __init__(self, config: SimpleNamespace, **kwargs):
-        super().__init__(config, **kwargs)
-        # +1 for SOS/CLS token
-        if 'num_actions' in kwargs:
-            self.action_embeddings = nn.Embedding(kwargs['num_actions'] + 1, config.d_model)
-            cls_id = th.tensor(kwargs['num_actions'])
-            self.register_buffer('cls_id', cls_id)
-            self.action_enc_mode = 'emb'
-        elif 'action_dim' in kwargs:
-            self.action_embeddings = nn.Linear(kwargs['action_dim'], config.d_model)
-            self.cls_embedding = nn.Parameter(th.randn(config.d_model))
-            self.action_enc_mode = 'lin'
-        else:
-            raise ValueError('ActionProcessor requires either num_actions or action_dim')
-        self.setup_position_embeddings(kwargs['max_seq_length'] + 1)
-        self.to(self.config.device)
-
-    @staticmethod
-    def required_attributes() -> dict:
-        return {'max_seq_length': int}
-    
-    def get_reconstruction_types(self) -> List[str]:
-        return ['tok_reconst']
-
-    def forward(self, actions: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
-        # Trajectories should already be padded at this point
-        batch_size, traj_length = actions.shape
-        actions = th.from_numpy(actions).to(self.config.device).int()
-        att_mask = th.from_numpy(att_mask).to(self.config.device).int()
-        # Add cls token to the start of each traj
-        if self.action_enc_mode == 'emb':
-            actions = th.cat([self.cls_id.expand(batch_size, 1).to(self.config.device), actions], dim=1)
-        att_mask = th.cat([th.ones(batch_size, 1, device=self.config.device), att_mask], dim=1)
-        # Embed
-        input_embeds = self.action_embeddings(actions)
-        if self.action_enc_mode == 'lin':
-            input_embeds = th.cat([self.cls_embedding.expand(batch_size, 1, -1), input_embeds], dim=1)
-        position_embeddings = self.get_position_embeddings(input_embeds.shape[1])
-        embeddings = (input_embeds * math.sqrt(self.config.d_model)) + position_embeddings
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-        return embeddings, att_mask
-
-    def get_embedding_weights(self) -> th.Tensor:
-        return self.action_embeddings.weight
-
 class TrajectoryProcessor(Processor):
     """
     Processes a grid world representation into input embeddings.
@@ -291,6 +237,9 @@ class TrajectoryProcessor(Processor):
     @staticmethod
     def required_attributes() -> dict:
         return {'state_shape': List, 'max_seq_length': int, 'traj_type': str, 'num_diff_actions': int}
+
+    def get_embedding_weights(self) -> th.Tensor:
+        return self.action_embeddings.weight
 
     def forward(self, traj: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point

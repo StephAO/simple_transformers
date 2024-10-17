@@ -6,8 +6,7 @@ import torch.nn as nn
 from transformers import RobertaConfig, RobertaTokenizer, RobertaForMaskedLM, AutoConfig, GPT2LMHeadModel, AutoTokenizer
 
 from simple_transformers.modality_processors import MODALITY_PROCESSORS
-from simple_transformers.transformer_heads import TransformHead, ClassificationHead, TokenReconstructionHead, \
-    LinearReconstructionHead, DeconvReconstructionHead, ProjectionHead
+from simple_transformers.transformer_heads import TransformHead, TokenReconstructionHead, StateReconstructionHead
 from simple_transformers.utils import _init_weights, get_config
 
 from typing import Any, Dict, List, Tuple, Union
@@ -15,11 +14,11 @@ from types import SimpleNamespace
 
 
 class TransformerMixin(object):
-    def setup_heads(self, preprocessor, inc_action_rec=False, **kwargs):
+    def setup_heads(self, preprocessor, traj_reconst=False, **kwargs):
         self.transform_head = TransformHead(self.config)
-        if inc_action_rec:
-            print("WE BE DOING IT")
+        if traj_reconst:
             self.action_rec_head = TokenReconstructionHead(self.config, preprocessor.get_embedding_weights())
+            self.state_rec_head = StateReconstructionHead(self.config, **kwargs)
             
     def check_modalities(self, modalities):
         for modality in modalities:
@@ -111,7 +110,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
         self.encoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layers, self.config.n_layers, self.encoder_norm)
 
-        self.encoder_heads = self.setup_heads(self.preprocessor, inc_action_rec=self.inc_action_mask, **kwargs)
+        self.encoder_heads = self.setup_heads(self.preprocessor, traj_reconst=self.inc_action_mask, **kwargs)
 
         self._init_parameters()
         self.to(self.config.device)
@@ -131,6 +130,7 @@ class ModalityEncoder(nn.Module, TransformerMixin):
 
         if self.inc_action_mask:
             return_embs['tok_reconst'] = self.action_rec_head(output)
+            return_embs['state_reconst'] = self.state_rec_head(output)
         return return_embs, attention_mask
 
 
@@ -154,8 +154,6 @@ class ModalityDecoder(nn.Module, TransformerMixin):
                                                          activation='gelu', batch_first=True)
         self.decoder_norm = nn.LayerNorm(self.config.d_model, eps=self.config.layer_norm_eps)
         self.decoder = nn.TransformerEncoder(self.decoder_layers, self.config.n_layers, self.decoder_norm)
-
-        # self.decoder_heads = self.setup_heads(self.preprocessor, **kwargs)
 
         emb_weights = self.preprocessor.get_embedding_weights()
         self.lm_head = TokenReconstructionHead(self.config, emb_weights)
@@ -249,11 +247,12 @@ class HFDecoder(nn.Module, TransformerMixin):
         # Output should be shape (batch size, seq len, d_model).
         output = self.decoder.transformer(model_input, attention_mask=attention_mask, position_ids=position_ids,
                                           use_cache=False)[0]
+
         return_embs = {'none': output, 'tok_reconst': self.decoder.lm_head(output),
                        'transform': self.transform_head(output)}
         return return_embs, attention_mask
 
-    def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer):
+    def inference_decoding(self, start_seqs, att_mask, max_new_tokens, tokenizer, eos_token_id=None):
         if not isinstance(start_seqs, th.Tensor):
             start_seqs, att_mask = th.tensor(start_seqs, device=self.config.device, dtype=int), \
                                    th.tensor(att_mask, device=self.config.device, dtype=int)
@@ -261,12 +260,13 @@ class HFDecoder(nn.Module, TransformerMixin):
             start_seqs, att_mask = start_seqs.to(self.config.device), att_mask.to(self.config.device)
 
         output = self.decoder.generate(start_seqs, attention_mask=att_mask, max_new_tokens=max_new_tokens,
-                                       return_dict_in_generate=True, output_scores=True)#, output_logits=True)
+                                       return_dict_in_generate=True, output_scores=True, eos_token_id=eos_token_id,
+                                       pad_token_id=2)
         output.scores = th.softmax(th.stack(output.scores, dim=1), dim=-1)
         return output.sequences, output.scores
 
     def load(self, name, tag):
-        print(f'Loading HuggingFace Model {self.model_name}')
+        print(f'Loading HuggingFace Model {self.model_name}: {name} - {tag}')
         if tag == 'base_hf':
             self.decoder = GPT2LMHeadModel.from_pretrained(self.model_name).to(self.config.device)
         else:
