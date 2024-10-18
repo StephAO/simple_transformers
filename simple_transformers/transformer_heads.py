@@ -1,6 +1,5 @@
 import torch as th
 import torch.nn as nn
-from debugpy.launcher import channel
 
 from simple_transformers.utils import CNNDecoder
 
@@ -78,7 +77,7 @@ class StateReconstructionHead(nn.Module):
         input_size = input_size if input_size else config.d_model
         self.transform_head = TransformHead(config, input_size=input_size)
         self.channel_dims = kwargs["observation_space"]
-        self.decoder = nn.Linear(input_size, th.sum(kwargs["observation_space"]))
+        self.decoder = nn.Linear(input_size, sum(kwargs["observation_space"]))
 
     def forward(self, hidden_states):
         hidden_states = self.transform_head(hidden_states)

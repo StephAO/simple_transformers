@@ -289,6 +289,5 @@ class TrajectoryProcessor(Processor):
 MODALITY_PROCESSORS = {
     'text': TextProcessor,
     'images': ImageProcessor,
-    'actions': ActionProcessor,
     'trajs': TrajectoryProcessor,
 }
