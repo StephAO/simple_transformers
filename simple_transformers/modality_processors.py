@@ -232,6 +232,8 @@ class TrajectoryProcessor(Processor):
         # +1 for CLS token
         self.setup_position_embeddings(kwargs['max_seq_length'] + 1)
         self.cls_embedding = nn.Parameter(th.randn(config.d_model))
+        # Mask embedding for states
+        self.state_mask_embedding = nn.Parameter(th.randn(config.d_model))
         self.to(self.config.device)
 
     @staticmethod
@@ -244,6 +246,10 @@ class TrajectoryProcessor(Processor):
     def forward(self, traj: np.array, att_mask: np.array) -> Tuple[th.Tensor, th.Tensor]:
         # Trajectories should already be padded at this point
         states, actions = traj
+
+        # Get all zero states to find which indices should be masked
+        state_mask_indices = (states == 0).all(dim=-1)  # Shape: (batch_size, sequence_length)
+
         states_att_mask, actions_att_mask = att_mask
         batch_size, traj_length, *_ = states.shape
 
@@ -255,6 +261,8 @@ class TrajectoryProcessor(Processor):
         if self.traj_type == 'states' or self.traj_type == 'fl_states':
             # Extracting first and last state is done in dataset before padding
             input_embeds = state_embeds
+            # set zero states to mask embedding
+            input_embeds[state_mask_indices] = self.state_mask_embedding
             att_mask = states_att_mask
         elif self.traj_type == 'states_actions':
             # Interleaves states and actions
